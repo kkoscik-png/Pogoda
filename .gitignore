@@ -1,0 +1,14 @@
+*.iml
+.gradle/
+local.properties
+.idea/
+.DS_Store
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Podpisywanie — nigdy nie trafia do repozytorium
+keystore.properties
+*.jks
+*.keystore
