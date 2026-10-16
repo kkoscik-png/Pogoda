@@ -18,3 +18,5 @@
 .map-section{min-height:460px;height:clamp(460px,48vh,620px)}
 
 .wave-source{display:block;width:100%;margin-top:12px;padding:10px 8px;border:1px solid #d3e1e6;border-radius:6px;background:#f7fafb;color:#214c5c;font:inherit;font-size:11px}.model-tabs{flex-wrap:wrap}.model-tabs button{min-width:42px}.chart-content,.loading{min-height:501px}
+
+.pin-weather-label .pin-wave{display:flex;align-items:center;gap:4px;margin-top:6px;padding-top:5px;border-top:1px solid #9bbfce45;color:#a9e7ff;font-variant-numeric:tabular-nums;white-space:nowrap}.pin-wave>span:first-child{font-size:9px;color:#b8ced9}.pin-wave b{font-size:18px;font-weight:700}.pin-wave small{font-size:8px;margin-left:2px;color:#9eb6c2}.pin-wave.missing{color:#acc0c9}.pin-weather-label .pin-wave-message{display:block;font-size:8px;color:#e8cd94;margin-top:3px}

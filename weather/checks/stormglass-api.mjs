@@ -10,3 +10,19 @@ test('real provider schema from one live sample normalizes without relabeling SM
 test('client wave source switches port values, excludes WAM map/route and restores ECMWF independently',async()=>{const nodes=new Map(),el=id=>{if(!nodes.has(id))nodes.set(id,{style:{},classList:{toggle(){}},setAttribute(){},querySelector(){return null;},append(){}});return nodes.get(id);};const c={Intl,URLSearchParams,AbortSignal,matchMedia:()=>({matches:false}),document:{getElementById:el,querySelector:el,querySelectorAll:()=>[]},fetch:async()=>({ok:true,json:async()=>({records:[0,1,2].map(id=>({id:String(id),...normalizeStormglass(fixture,{lat:58,lon:20},Date.now())}))})})};vm.createContext(c);vm.runInContext(fs.readFileSync('dist/app.js','utf8').replace(/start\(\);\s*$/,'')+';globalThis.t={state,WAVE_SOURCES,selectWaveSource,loadStormglassPorts,waveAt,currentGrid,routeWaveValues,renderWaveSource};',c);const t=c.t;t.state.times=[Date.parse('2026-10-16T12:00:00Z')/1000];t.state.wave=[{hourly:{time:t.state.times,wave_height:[7]}}];t.state.waveGrid=[{}];t.state.routeWaveGrid=[{}];t.state.stormglassStatus={configured:true,routeEnabled:false};t.WAVE_SOURCES.stormglass.available=true;assert.equal(t.selectWaveSource('stormglass'),true);await t.loadStormglassPorts();assert.equal(t.waveAt(0,'wave_height'),0);t.state.layer='wave';assert.equal(t.currentGrid(),null);assert.equal(t.routeWaveValues().length,0);t.state.layer='wind';t.selectWaveSource('ecmwf_wam');assert.equal(t.waveAt(0,'wave_height'),7);});
 
 test('an unavailable platform Cache API does not prevent a valid forecast or repeated memory cache reads',async()=>{let calls=0;const api=createStormglassAPI({cache:{async match(){throw Error('Cache unavailable')},async put(){throw Error('Cache unavailable')}},fetcher:async()=>{calls++;return Response.json(fixture)}});assert.equal((await api(req(base+'waves'),env)).status,200);assert.equal((await api(req(base+'waves'),env)).status,200);assert.equal(calls,3);});
+
+test('Stormglass port map labels show hourly height and direction even with route disabled',()=>{
+ const nodes=new Map(),el=id=>{if(!nodes.has(id))nodes.set(id,{style:{},classList:{toggle(){}},setAttribute(){},querySelector(){return null;},append(){}});return nodes.get(id);};
+ const c={Intl,URLSearchParams,AbortSignal,matchMedia:()=>({matches:false}),document:{getElementById:el,querySelector:el,querySelectorAll:()=>[]},L:{divIcon:options=>options}};
+ vm.createContext(c);vm.runInContext(fs.readFileSync('dist/app.js','utf8').replace(/start\(\);\s*$/,'')+';globalThis.t={state,markerIcon,stormglassMapStatus};',c);
+ const {state,markerIcon,stormglassMapStatus}=c.t;
+ state.waveSource='stormglass';state.stormglassStatus={configured:true,routeEnabled:false};state.flags=false;
+ state.times=fixture.hours.map(r=>Date.parse(r.time)/1000);state.stormglassWave=[0,1,2].map(()=>normalizeStormglass(fixture,{lat:58,lon:20},Date.now()));
+ for(const i of [0,1,2]){const html=markerIcon(i).html;assert.match(html,/Fala Hs/);assert.match(html,/<b>0,0<\/b>/);assert.match(html,/Stormglass AI/);assert.match(html,/rotate\(180deg\)/);}
+ state.hour=1;assert.match(markerIcon(0).html,/<b>1,5<\/b>/);assert.match(markerIcon(0).html,/rotate\(20deg\)/);
+ assert.match(stormglassMapStatus(),/3\/3/);assert.match(stormglassMapStatus(),/wyłączona/);
+ state.times.push(state.times[1]+3600);state.hour=2;assert.match(markerIcon(0).html,/Brak danych na tę godzinę/);assert.match(stormglassMapStatus(),/0\/3/);
+ state.stormglassLoading=true;assert.match(markerIcon(1).html,/Pobieranie/);assert.match(stormglassMapStatus(),/pobieranie/);
+ state.stormglassLoading=false;state.errors.stormglass='Stormglass: osiągnięto dzienny limit zapytań.';assert.match(markerIcon(2).html,/Dane niedostępne/);assert.match(stormglassMapStatus(),/limit/);
+ state.waveSource='ecmwf_wam';assert.doesNotMatch(markerIcon(0).html,/pin-wave/);
+});
