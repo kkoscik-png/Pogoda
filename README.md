@@ -1,74 +1,47 @@
-# Pogoda — aplikacja pogodowa na Androida
+# BALTIC — weather.seasync.co
 
-Natywna aplikacja w Kotlinie z Jetpack Compose. Korzysta z **Open-Meteo** —
-darmowego API pogodowego, które **nie wymaga klucza ani rejestracji**.
+Aplikacja pogodowa dla BW Ventspils, Ventspils Berth i Norvik Berth. Gałąź zawiera wyłącznie aplikację pogodową; wszystkie pliki aplikacji są w katalogu głównym repozytorium.
 
-## Co potrafi
+Wersja na własnym Cloudflare działa **bez logowania i kodu PIN**. Każdy znający adres może ją otworzyć. Worker nie wymaga Cloudflare Access, TEAM ani AUD. Klucz Stormglass pozostaje sekretem serwerowym. Oddzielny podgląd Sites zachowuje swoje dotychczasowe ustawienia dostępu.
 
-- aktualna pogoda dla lokalizacji z GPS (z obsługą uprawnień w czasie działania),
-- wyszukiwarka miast na całym świecie (z opóźnieniem 300 ms, żeby nie zasypywać API),
-- prognoza godzinowa na 24 h,
-- prognoza na 7 dni z paskiem zakresu temperatur,
-- tryb jasny i ciemny,
-- gradient nagłówka zmieniający się razem z porą dnia i warunkami.
+## Wdrożenie przez panel Cloudflare
 
-## Jak uruchomić
+Ustaw Root directory `/`. Pliki `package.json` i `wrangler.jsonc` są bezpośrednio w głównym katalogu gałęzi `weather-ciswing-co`.
 
-1. Zainstaluj **Android Studio** (Ladybug lub nowsze).
-2. `File → Open…` i wskaż ten katalog.
-3. Android Studio dociągnie Gradle Wrapper i zsynchronizuje projekt.
-4. `Run ▶` na emulatorze lub telefonie.
+1. Sprawdź, czy domena `seasync.co` jest aktywna na Twoim koncie Cloudflare.
+2. W Workers & Pages utwórz aplikację Worker z repozytorium GitHub `kkoscik-png/Pogoda`.
+3. Wybierz gałąź produkcyjną `weather-ciswing-co` i katalog główny `/` (główny katalog repozytorium).
+4. Ustaw nazwę Workera `baltic-weather`, polecenie budowania `npm test`, polecenie wdrożenia `npm run deploy`. Instalacja zależności: `npm ci` (jeśli panel pokazuje osobne pole).
+5. Wdróż. Konfiguracja `wrangler.jsonc` deklaruje Custom Domain `weather.seasync.co`. Jeśli pojawi się konflikt istniejącego rekordu lub aplikacji, sprawdź, co już obsługuje ten adres, przed zastąpieniem.
+6. Nie twórz aplikacji Cloudflare Access ani logowania PIN dla tej strony. Jeśli wcześniej utworzono ochronę Access obejmującą ten host, wyłącz ją dla `weather.seasync.co`. Samo wdrożenie kodu nie usuwa osobnej polityki Access na brzegu sieci.
+7. Dodaj sekret Stormglass zgodnie z następną sekcją.
 
-> W repozytorium nie ma pliku `gradle/wrapper/gradle-wrapper.jar` (to plik binarny).
-> Android Studio wygeneruje go przy pierwszej synchronizacji. Jeśli wolisz z konsoli:
-> `gradle wrapper` (przy lokalnie zainstalowanym Gradle), a potem `./gradlew assembleDebug`.
+Kod jest przygotowany do wdrożenia. Sam zapis w GitHubie nie potwierdza, że domena i produkcyjny Worker zostały już zaktualizowane.
 
-Wersje bibliotek są w `gradle/libs.versions.toml`. Android Studio sam podpowie
-nowsze — warto przyjąć te podpowiedzi.
+## Stormglass
 
-## Struktura
+Po wdrożeniu: Workers & Pages → baltic-weather → Settings → Variables and Secrets → Add → Secret. Nazwa: `STORMGLASS_API_KEY`; wartość: Twój klucz Stormglass. Zapisz i zastosuj zmianę. Dodaj go do środowiska działającego Workera, nie tylko środowiska budowania. Sekret z podglądu Sites nie przenosi się automatycznie na własne konto Cloudflare.
 
-```
-app/src/main/java/com/example/pogoda/
-├── MainActivity.kt
-├── data/
-│   ├── Dto.kt               modele JSON (kotlinx.serialization)
-│   ├── OpenMeteoApi.kt      interfejsy Retrofit
-│   ├── Network.kt           konfiguracja OkHttp + Retrofit
-│   ├── Model.kt             modele domenowe
-│   ├── WeatherCodes.kt      kody WMO → opis po polsku + emoji
-│   └── WeatherRepository.kt pobieranie i mapowanie danych
-├── location/
-│   └── LocationProvider.kt  FusedLocationProviderClient jako coroutine
-└── ui/
-    ├── WeatherViewModel.kt  stan ekranu (StateFlow)
-    ├── WeatherScreen.kt     całe UI
-    └── theme/Theme.kt       paleta, typografia, gradienty
+W aplikacji wybierz źródło fali `Stormglass AI`. Domyślnie pobierane są trzy pozycje portowe, a odpowiedzi są buforowane przez sześć godzin. Pełna siatka trasy wymaga `STORMGLASS_ROUTE_ENABLED=true` i odpowiedniego limitu konta: obejmuje 59 pozycji. Przy limicie 10 zapytań dziennie pozostaw tę opcję wyłączoną.
+
+## Wdrożenie z terminala
+
+```bash
+npm ci
+npm test
+npx wrangler login
+npm run deploy
+npx wrangler secret put STORMGLASS_API_KEY
 ```
 
-## Warto wiedzieć
+Logowanie Wrangler służy zarządzaniu kontem Cloudflare. Odwiedzający stronę nie logują się.
 
-- `minSdk = 26` — dzięki temu można używać `java.time` bez desugaringu.
-  Jeśli potrzebujesz Androida 7, w `app/build.gradle.kts` włącz
-  `coreLibraryDesugaringEnabled = true` i dodaj `com.android.tools:desugar_jdk_libs`.
-- Czas „teraz" bierzemy z odpowiedzi API (`timezone=auto`), a nie z telefonu —
-  dzięki temu prognoza dla Tokio pokazuje godziny tokijskie.
-- Aplikacja nie zapisuje niczego na dysku. Kolejne kroki, jeśli chcesz ją rozwijać:
-  cache w Room, zapisane lokalizacje, widget na ekran główny, powiadomienia
-  o ostrzeżeniach, WorkManager do odświeżania w tle.
+## Weryfikacja
 
-## Budowanie bez Android Studio (GitHub Actions)
+- `weather.seasync.co` otwiera aplikację w prywatnym oknie przeglądarki bez przekierowania do Access i bez PIN-u.
+- Mapa, wykres i źródła pogody działają.
+- `/api/stormglass/status` zwraca `configured: true` po dodaniu sekretu, bez jego wartości.
+- Kod i zasoby przeglądarki nie zawierają klucza Stormglass.
+- Domeny `workers.dev` oraz podglądy pozostają wyłączone.
 
-W repozytorium jest gotowy workflow `.github/workflows/build-apk.yml`.
-
-1. Wrzuć projekt na GitHuba (może być repozytorium prywatne).
-2. Wejdź w zakładkę **Actions** i potwierdź uruchamianie workflowów.
-3. Build ruszy sam po pushu — albo ręcznie: *Zbuduj APK → Run workflow*.
-4. Po ~5 minutach w podsumowaniu builda pojawi się sekcja **Artifacts**
-   z plikiem `pogoda-debug-apk` do pobrania.
-
-Artefakt pobiera się jako ZIP — w środku jest `app-debug.apk`.
-
-Limity GitHuba: repozytoria publiczne budują się bez ograniczeń,
-prywatne mają 2000 minut miesięcznie w darmowym planie. Ten build zajmuje
-kilka minut, więc w praktyce limit nie przeszkadza.
+Sprawdzenie lokalne: `npm test` oraz `npm run build:check`. Szczegóły funkcji aplikacji: [APP_NOTES.md](APP_NOTES.md).
