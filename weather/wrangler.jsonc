@@ -6,7 +6,7 @@
   "workers_dev": false,
   "preview_urls": false,
   "routes": [
-    { "pattern": "weather.ciswing.co", "custom_domain": true }
+    { "pattern": "weather.seasync.co", "custom_domain": true }
   ],
   "assets": {
     "directory": "./dist",

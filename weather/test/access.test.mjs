@@ -10,12 +10,12 @@ const audience = 'test-weather-audience';
 const handler = createHandler(() => createLocalJWKSet({ keys: [jwk] }));
 let assetCalls = 0;
 const env = { ACCESS_TEAM_DOMAIN: 'test-team.cloudflareaccess.com', ACCESS_AUD: audience, ASSETS: { async fetch() { assetCalls++; return new Response('private weather app'); } } };
-const request = (jwt, host = 'weather.ciswing.co', path = '/') => new Request('https://' + host + path, { headers: jwt ? { 'Cf-Access-Jwt-Assertion': jwt } : {} });
+const request = (jwt, host = 'weather.seasync.co', path = '/') => new Request('https://' + host + path, { headers: jwt ? { 'Cf-Access-Jwt-Assertion': jwt } : {} });
 const token = overrides => new SignJWT({ sub: 'owner', ...overrides }).setProtectedHeader({ alg: 'RS256', kid: 'test-key' }).setIssuer(issuer).setAudience(audience).setIssuedAt().setExpirationTime('10m').sign(privateKey);
 
 test('configuration missing denies HTML and assets without reading the asset binding', async () => {
   const before = assetCalls;
-  for (const path of ['/', '/app.js', '/assets/leaflet.js']) assert.equal((await handler(request(null, 'weather.ciswing.co', path), { ...env, ACCESS_AUD: '' })).status, 503);
+  for (const path of ['/', '/app.js', '/assets/leaflet.js']) assert.equal((await handler(request(null, 'weather.seasync.co', path), { ...env, ACCESS_AUD: '' })).status, 503);
   assert.equal(assetCalls, before);
 });
 test('a missing or forged token never releases assets', async () => {

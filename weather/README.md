@@ -1,4 +1,4 @@
-# BALTIC — weather.ciswing.co
+# BALTIC — weather.seasync.co
 
 Gotowa do przeniesienia wersja aplikacji pogodowej dla BW Ventspils, Ventspils Berth i Norvik Berth. Kopia odpowiada wersji aplikacji z jasną mapą i pełnym pokryciem Ventspils (źródłowy commit Sites: `f48ff9418093e6fb25b9c6f4b5a81eaa14f619fd`).
 
@@ -7,15 +7,15 @@ Ten katalog jest niezależny od starszego projektu Android znajdującego się w 
 ## Stan
 
 - Kod aplikacji, lokalne biblioteki mapy i testy są przygotowane.
-- Docelowy adres w konfiguracji: `weather.ciswing.co`.
-- Nie potwierdzono wdrożenia w koncie Cloudflare ani własności/aktywnej strefy DNS `ciswing.co`.
-- Odczyt publicznego DNS 16 października 2026 r. zwrócił NXDOMAIN dla `ciswing.co`.
+- Docelowy adres w konfiguracji: `weather.seasync.co`.
+- Nie potwierdzono wdrożenia w koncie Cloudflare ani własności/aktywnej strefy DNS `seasync.co`.
+- Adres docelowy został potwierdzony przez właściciela jako `weather.seasync.co`.
 - Bez konfiguracji Access Worker odpowiada 503 i nie udostępnia plików aplikacji.
 
 ## Uruchomienie na koncie Cloudflare
 
-1. W Cloudflare sprawdzić, czy strefa `ciswing.co` znajduje się na właściwym koncie i ma aktywne serwery nazw. Nie zastępować tego adresu inną domeną bez decyzji właściciela.
-2. W Cloudflare One / Access utworzyć aplikację Self-hosted dla dokładnego hosta `weather.ciswing.co`. Dodać politykę Allow tylko dla właściciela (adres zweryfikowany na połączonym GitHubie: `k.koscik@gmail.com`).
+1. W Cloudflare sprawdzić, czy strefa `seasync.co` znajduje się na właściwym koncie i ma aktywne serwery nazw. Nie zastępować tego adresu inną domeną bez decyzji właściciela.
+2. W Cloudflare One / Access utworzyć aplikację Self-hosted dla dokładnego hosta `weather.seasync.co`. Dodać politykę Allow tylko dla właściciela (adres zweryfikowany na połączonym GitHubie: `k.koscik@gmail.com`).
 3. Odczytać domenę zespołu `NAZWA.cloudflareaccess.com` i Application Audience (AUD). Wpisać je w `vars.ACCESS_TEAM_DOMAIN` i `vars.ACCESS_AUD` w `wrangler.jsonc`. To identyfikatory konfiguracji, nie token API Cloudflare. Nie publikować żadnych kluczy ani tokenów w repozytorium.
 4. Zalogować Wrangler na właściwe konto i wdrożyć:
 
@@ -33,7 +33,7 @@ Alternatywnie w Cloudflare Workers można połączyć repozytorium GitHub, wskaz
 
 ## Weryfikacja po wdrożeniu
 
-- DNS i HTTPS działają dla `weather.ciswing.co`.
+- DNS i HTTPS działają dla `weather.seasync.co`.
 - Niezalogowana przeglądarka trafia do logowania Access, a nie do aplikacji.
 - Właściciel po zalogowaniu widzi aplikację, dane i animacje.
 - Domeny `workers.dev` oraz podglądy są wyłączone.

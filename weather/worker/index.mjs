@@ -19,7 +19,7 @@ export function createHandler(resolveKeys = signingKeys) {
     if (!/^[a-z0-9-]+\.cloudflareaccess\.com$/.test(team) || !audience || !env.ASSETS?.fetch) {
       return deny('Prywatna aplikacja — konfiguracja Cloudflare Access oczekuje na dokończenie.', 503);
     }
-    if (new URL(request.url).hostname !== 'weather.ciswing.co') return deny('Niedozwolony adres aplikacji.', 403);
+    if (new URL(request.url).hostname !== 'weather.seasync.co') return deny('Niedozwolony adres aplikacji.', 403);
     const assertion = request.headers.get('Cf-Access-Jwt-Assertion');
     if (!assertion) return deny('Wymagane logowanie przez Cloudflare Access.', 401);
     try {
