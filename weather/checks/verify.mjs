@@ -1,0 +1,27 @@
+import fs from 'node:fs';
+import vm from 'node:vm';
+import assert from 'node:assert/strict';
+const nodes=new Map();const el=id=>{if(!nodes.has(id))nodes.set(id,{innerHTML:'',textContent:'',style:{},setAttribute(){},classList:{toggle(){}}});return nodes.get(id)};
+const sandbox={Intl,Date,Math,Number,Array,Object,String,Map,Set,console,URLSearchParams,AbortSignal,matchMedia:()=>({matches:false}),document:{getElementById:el,querySelector:el,querySelectorAll:()=>[],createElement:()=>({className:'',innerHTML:''})}};
+vm.createContext(sandbox);
+const code=fs.readFileSync('dist/app.js','utf8').replace(/start\(\);\s*$/,'');
+vm.runInContext(code+`;globalThis.api={state,grid,isSea,at,windAt,waveAt,sample,color,linePath,url,renderPorts,renderChart,renderSummary,renderTimeline,MODELS,PORTS,direction,renderPointDetails,loadPorts,distanceKm};`,sandbox);
+const {state,grid,isSea,at,windAt,waveAt,sample,color,linePath,url,renderPorts,renderChart,renderTimeline,MODELS,PORTS,direction,renderPointDetails,loadPorts,distanceKm}=sandbox.api;
+state.land=JSON.parse(fs.readFileSync('dist/assets/land.json','utf8'));state.gridPoints=grid();
+assert(state.gridPoints.length>20&&state.gridPoints.length<80);assert(isSea(20,57));assert(!isSea(15,59));
+assert.equal(at({hourly:{time:[1],x:[null]}},'x',1),null);assert.equal(at({hourly:{time:[1],x:[0]}},'x',1),0);assert.equal(at({hourly:{time:[1],x:[3]}},'x',2),null);
+assert.equal(linePath([1,null,2],x=>x),'M24,1.00 M120,2.00 ');assert(direction(0).includes('rotate(0deg)'));
+state.times=[state.base,state.base+3600];
+state.wind=Object.fromEntries(Object.keys(MODELS).map((m,i)=>[m,PORTS.map((p,j)=>({latitude:p.lat+.01,longitude:p.lon+.01,hourly:{time:state.times,wind_speed_10m:[i+j+4,i+j+5],wind_gusts_10m:[i+j+7,i+j+8],wind_direction_10m:[90,110]}}))]));
+state.wave=PORTS.map(p=>({latitude:p.lat+.02,longitude:p.lon+.02,hourly:{time:state.times,wave_height:[0,1.2],wave_direction:[180,200],wave_period:[4,5]}}));
+assert.equal(PORTS.length,3);assert.equal(PORTS[0].lat,57.407578);assert.equal(PORTS[0].lon,21.525557);assert.equal(PORTS[1].lat,57.398842);assert.equal(PORTS[1].lon,21.576607);assert.equal(PORTS[2].lat,58.939033);assert.equal(PORTS[2].lon,17.979752);
+assert(distanceKm(PORTS[0],PORTS[1])>3);renderPointDetails();assert(el('pointDetails').innerHTML.includes('57.407578'));assert(el('pointDetails').innerHTML.includes('Siatka'));
+for(const model of Object.keys(MODELS)){state.model=model;assert(windAt(0,'wind_speed_10m')>=4);renderPorts();renderChart();renderTimeline();assert(el('chartContent').innerHTML.includes('hour-col'));assert(!el('chartContent').innerHTML.includes('NaN'));assert(!el('ports').innerHTML.includes('NaN'));}
+state.compare=true;el('forecast-legend').append=()=>{};sandbox.document.querySelector=()=>({append(){}});renderChart();assert(el('chartContent').innerHTML.includes('#a18ac8'));
+state.windGrid[state.model]=[{lat:57,lon:20,series:{hourly:{time:state.times,wind_speed_10m:[10,12],wind_direction_10m:[90,90]}}}];const s=sample(57,20);assert.equal(s.value,10);assert(s.u<-.99);assert(Math.abs(s.v)<.01);assert.equal(sample(65,11),null);
+state.layer='wave';state.waveGrid=[{lat:57,lon:20,series:state.wave[0]}];assert.equal(sample(57,20).value,0);assert.equal(color(0).length,3);
+const requests=Object.fromEntries(Object.keys(MODELS).map(m=>[m,url('https://api.open-meteo.com/v1/forecast',PORTS,{hourly:'wind_speed_10m,wind_gusts_10m,wind_direction_10m',models:m,wind_speed_unit:'ms',cell_selection:'nearest'})]));
+requests.wave=url('https://marine-api.open-meteo.com/v1/marine',PORTS,{hourly:'wave_height,wave_direction,wave_period',models:'ecmwf_wam',cell_selection:'sea'});
+requests.wavegrid=url('https://marine-api.open-meteo.com/v1/marine',grid('wave'),{hourly:'wave_height,wave_direction,wave_period',models:'ecmwf_wam',cell_selection:'sea'});
+fs.writeFileSync('/tmp/baltic-api-requests.json',JSON.stringify(requests));
+console.log('PASS: 3 exact locations, independent model records, hourly lookup, missing/zero values, comparison, chart/table, grid metadata, vectors, spatial interpolation and API requests.');

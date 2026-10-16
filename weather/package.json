@@ -1,0 +1,17 @@
+{
+  "name": "baltic-weather-ciswing",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "node --check dist/app.js && node checks/verify.mjs && node checks/flags-table.mjs && node checks/gust-labels.mjs && node checks/coverage.mjs && node --test test/access.test.mjs",
+    "deploy": "wrangler deploy",
+    "build:check": "wrangler deploy --dry-run --outdir .wrangler/dry-run"
+  },
+  "dependencies": {
+    "jose": "6.2.12"
+  },
+  "devDependencies": {
+    "wrangler": "4.151.0"
+  }
+}
