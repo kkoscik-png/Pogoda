@@ -37,3 +37,10 @@ test('expired and wrong-audience tokens are rejected', async () => {
   assert.equal((await handler(request(expired), env)).status, 403);
   assert.equal((await handler(request(wrong), env)).status, 403);
 });
+
+test('Stormglass API is protected by the same JWT gate as private assets', async () => {
+  const before = assetCalls;
+  assert.equal((await handler(request(null, 'weather.seasync.co', '/api/stormglass/status'), env)).status, 401);
+  const response = await handler(request(await token(), 'weather.seasync.co', '/api/stormglass/status'), env);
+  assert.equal(response.status, 200);assert.equal((await response.json()).configured, false);assert.equal(assetCalls, before);
+});

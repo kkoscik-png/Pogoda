@@ -40,3 +40,11 @@ Alternatywnie w Cloudflare Workers można połączyć repozytorium GitHub, wskaz
 - Przy pustych TEAM/AUD, braku tokenu i błędnym tokenie nie da się odczytać HTML ani zasobów.
 
 Aktualne działające wdrożenie pozostaje pod adresem https://baltic-wind-wave.idealcrab9.chatgpt.site do czasu potwierdzenia migracji. Szczegóły aplikacji i źródeł pogodowych: [APP_NOTES.md](APP_NOTES.md).
+
+## Stormglass
+
+Po wdrożeniu dodaj w Cloudflare: Workers & Pages → baltic-weather → Settings → Variables and Secrets → Add → Secret. Nazwa: `STORMGLASS_API_KEY`; wartość: klucz z panelu Stormglass. Nie wpisuj klucza do GitHuba ani wrangler.jsonc. Zapisz i zastosuj zmianę środowiska. Następnie w aplikacji wybierz źródło fali `Stormglass AI`.
+
+Domyślnie pobierane są tylko trzy pozycje portowe, a serwer buforuje odpowiedzi przez sześć godzin. Pełna siatka trasy wymaga ustawienia `STORMGLASS_ROUTE_ENABLED=true` i odpowiedniego limitu konta: sama siatka ma 59 pozycji. Z kluczem o limicie 10 zapytań dziennie pozostaw tę opcję wyłączoną. Nie pobieramy danych wszystkich punktów automatycznie.
+
+Szczegóły zakresu, izolacji źródeł i testów znajdują się w APP_NOTES.md. Własny Worker wymaga także wcześniejszej konfiguracji Cloudflare Access. Sekret zapisany w obecnym podglądzie Sites nie jest automatycznie przenoszony do własnego konta Cloudflare.

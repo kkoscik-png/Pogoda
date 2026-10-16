@@ -1,6 +1,6 @@
 # Baltic — Open-Meteo
 
-Private, buildless marine weather dashboard for Ventspils and Nynäshamn / Norvik. Serve `dist` as the web root. No weather API key is required. The app has no Windy runtime, iframe, configuration or external API calls.
+Private marine weather dashboard for Ventspils and Nynäshamn / Norvik. Client source is in `client/`. The Sites build embeds it with a server-only API in `dist/server/index.js`; publish that Worker artifact. No weather API key is required. The app has no Windy runtime, iframe, configuration or external API calls.
 
 ## Exact query locations
 
@@ -81,3 +81,15 @@ SMHI works on all three point cards, graph/comparison, the fourth table row and 
 A separate wave-source select is present. ECMWF WAM is available; SMHI SWAN is visibly unavailable and disabled pending a verified documented wave-forecast source. No buoy observations are relabeled as forecast data and no WAM values are relabeled as SMHI. The promised user link has not been supplied; SMHI SWAN forecast integration remains incomplete. The public meteorological SNOW API has no wave parameters.
 
 SMHI open-data attribution is shown (CC BY 4.0); normalization to a common schema is disclosed. References: https://opendata.smhi.se/metfcst/snow1gv1/ and https://www.smhi.se/data/om-smhis-data/villkor-for-anvandning. `node checks/smhi.mjs` covers normalization, missing values, time gaps, point dispatcher isolation, wind/wave independence, four-source UI and blocking an unavailable wave selection.
+
+## Stormglass wave forecasts (server adapter)
+
+The Site is now a Worker with the existing six client assets embedded by `node scripts/build-worker.mjs`. The private Site identity and audience are preserved. Frontend source moved from `dist/` to `client/`; the external Cloudflare checkout still distributes its static frontend in `weather/dist/`. No API credential is in source, the frontend bundle, or hosting manifest.
+
+`STORMGLASS_API_KEY` is a secret runtime variable. The selected `Stormglass AI` source requests `waveHeight`, `waveDirection` and `wavePeriod` from the documented `/v2/weather/point` endpoint with `source=sg`, mapping only that exact source to the app's hourly record. The browser calls same-origin `/api/stormglass/status` and `/api/stormglass/waves?group=ports`; the secret is added only by the server's Authorization header. Fixed coordinate groups prevent an arbitrary-location proxy. Server cache lasts six hours, concurrent duplicate requests are coalesced, missing parameters remain null, upstream errors are sanitized and quotas remain errors. No automatic substitution with WAM or another source occurs.
+
+Default scope is the three port query positions. The 59-point Stormglass route is off unless `STORMGLASS_ROUTE_ENABLED=true` is explicitly configured; it is paginated in batches of five to stay within Worker subrequest limits. When Stormglass is selected without route support, its point forecast appears in cards, chart and table; its route numbers and coloured wave field are absent with an explicit scope note. Selecting ECMWF restores the existing 59-point route and wave field. This avoids presenting WAM as Stormglass or consuming 59 requests on a key with a ten-request daily quota.
+
+The supplied key was verified with one live 73-hour request at 58.2°N, 19.7°E. It reports dailyQuota=10 and requestCount=1. Returned data include waves, wind, gusts, swell, wind waves, current, sea level, ice, water/air temperature and pressure. The actual response has no SMHI source. Stormglass AI is a blend whose component models can differ by parameter. References: https://docs.stormglass.io/#/authentication and https://docs.stormglass.io/#/weather.
+
+`node --test checks/stormglass-api.mjs` covers credentials staying server-side, fixed-location access, six-hour cache, zero/null values, quota errors, explicit route gating, five-point pagination and frontend wave-source isolation. The external Worker validates the same Cloudflare Access JWT before API and assets. Browser visual QA remains unavailable.

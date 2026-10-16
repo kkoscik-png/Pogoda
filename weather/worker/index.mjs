@@ -1,4 +1,5 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { handleStormglass } from './stormglass.mjs';
 
 const remoteKeys = new Map();
 function signingKeys(issuer) {
@@ -11,7 +12,7 @@ const deny = (message, status) => new Response(message, {
 });
 
 export function createHandler(resolveKeys = signingKeys) {
-  return async function fetch(request, env) {
+  return async function fetch(request, env, ctx) {
     // All static assets pass this check first (assets.run_worker_first=true).
     // Missing Access configuration fails closed, including on alternate hostnames.
     const team = String(env.ACCESS_TEAM_DOMAIN || '').trim().toLowerCase();
@@ -32,6 +33,8 @@ export function createHandler(resolveKeys = signingKeys) {
     } catch {
       return deny('Nieprawidłowa lub wygasła sesja Cloudflare Access.', 403);
     }
+    const api = await handleStormglass(request, env, ctx);
+    if (api) return api;
     const asset = await env.ASSETS.fetch(request);
     const response = new Response(asset.body, asset);
     response.headers.set('Cache-Control', 'private, no-store');
