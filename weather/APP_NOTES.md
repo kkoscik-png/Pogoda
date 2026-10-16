@@ -24,7 +24,7 @@ Coordinates were read from the redirects of the three Google Maps links supplied
 
 ## Controls and checks
 
-Three point cards with source coordinates; three wind model tabs; wind, gust and wave map layers; shared hourly timeline and playback; zoom/focus; particles; 24/48/72-hour charts and tables; model comparison; refresh and source information.
+Three point cards with source coordinates; four wind source tabs; wind, gust and wave map layers; shared hourly timeline and playback; zoom/focus; particles; 24/48/72-hour charts and tables; model comparison; refresh and source information.
 
 Run `node --check dist/app.js` and `node checks/verify.mjs`. The latter checks exact coordinates, model separation, hourly joins, null/zero handling, charts/tables, metadata, vectors and interpolation. The actual APIs were also requested for the three points and all three atmospheric models plus ECMWF WAM. Browser visual QA was unavailable in the authoring environment.
 
@@ -34,9 +34,9 @@ Open-Meteo (CC BY 4.0 and source-model terms), ECMWF, DWD, Leaflet 1.9.4 (BSD-2-
 
 ## Model flags and hourly comparison
 
-Each exact point carries three vector model flags, with the model name and a mean wind–gust pair in m/s. Flag bearings follow each model's wind-from direction independently, with lateral label lanes for readability. The shared hourly selector, chart/table clicks, keyboard navigation and playback update all point markers. Missing speed/direction omits the affected flag; calm conditions use a circle. The map has a flag visibility toggle. The flags and point labels retain the wind/gust readout when the map color layer is gusts or waves.
+Each exact point carries four vector source flags, with the model name and a mean wind–gust pair in m/s. Flag bearings follow each model's wind-from direction independently, with lateral label lanes for readability. The shared hourly selector, chart/table clicks, keyboard navigation and playback update all point markers. Missing speed/direction omits the affected flag; calm conditions use a circle. The map has a flag visibility toggle. The flags and point labels retain the wind/gust readout when the map color layer is gusts or waves.
 
-The bottom comparison table follows the owner-provided reference: Swedish date bands, hourly columns, separate ICON-EU / ICON / ECMWF rows, independently wind/gust-colored cells, mean wind above gusts, flow-direction arrows, a selected-column marker and an ECMWF WAM height/period row. A model name selects the source for the main graph and map. Graphs and all table rows share one horizontal scroll area.
+The bottom comparison table follows the owner-provided reference: Swedish date bands, hourly columns, separate ICON-EU / ICON / ECMWF / SMHI rows, independently wind/gust-colored cells, mean wind above gusts, flow-direction arrows, a selected-column marker and an ECMWF WAM height/period row. A model name selects the source for the main graph and map. Graphs and all table rows share one horizontal scroll area.
 
 `node checks/flags-table.mjs` verifies flag direction/value updates, all point markers through the actual shared hourly selector, missing/calm data, toggle behavior, all model rows, selected columns and Swedish midnight date grouping. A generated SVG from real API records was rendered and visually inspected for flag readability. Full HTML/browser visual QA remains unavailable.
 
@@ -71,3 +71,13 @@ Only the numeric value is drawn at each position, with a transparent background 
 The numeric overlay is initially on for wind, gust and wave layers alike. The shared hour selector, table clicks, keyboard and playback update the values and the sampled min–max readout. A toggle hides the numbers. Label collisions are suppressed at smaller zooms and recomputed on pan/zoom/resize without further API requests. Missing values show a dash, calm zero remains 0.0, and cached stale records remain labeled. Refresh includes this request, with the existing 30-minute cache / six-hour failure fallback; the new cache key prevents reusing the smaller 27-point response.
 
 `node checks/route-waves.mjs` verifies geometry, the extra row's 15 NM spacing toward Gotland, cell-centre positions, both axis endpoints, hourly values, zero/null/stale cases, colour-layer independence, label spacing, and a numeric layer with no polylines or polygons. Full browser visual QA remains unavailable in this environment.
+
+## SMHI SNOW wind provider and wave source control
+
+Wind speed, gust and direction now include SMHI SNOW1gv1 as a fourth source. The app requests only the three selected locations from the documented endpoint `https://opendata-download-metfcst.smhi.se/api/category/snow1g/version/1/geotype/point/lon/{lon}/lat/{lat}/data.json`. The official SNOW schema uses `timeSeries[].time` and `timeSeries[].data.wind_speed`, `wind_speed_of_gust`, `wind_from_direction`; geometry coordinates retain the returned model cell. Wind and gust units are m/s, directions are wind-from degrees. The 9999 missing sentinel becomes null. Native timestamps are retained without temporal interpolation or extrapolation; later sparse hours and the current hour can therefore show dashes. SMHI never changes the common Open-Meteo hourly axis.
+
+SMHI works on all three point cards, graph/comparison, the fourth table row and fourth vector flag. The selected source is shown in the map stamp and metadata. No bulk SMHI point download is used for the regional wind field; choosing SMHI displays point data and an explicit map status, with no coloured wind field from another provider. Wave forecasts and the 59 route-wave numbers remain ECMWF WAM.
+
+A separate wave-source select is present. ECMWF WAM is available; SMHI SWAN is visibly unavailable and disabled pending a verified documented wave-forecast source. No buoy observations are relabeled as forecast data and no WAM values are relabeled as SMHI. The promised user link has not been supplied; SMHI SWAN forecast integration remains incomplete. The public meteorological SNOW API has no wave parameters.
+
+SMHI open-data attribution is shown (CC BY 4.0); normalization to a common schema is disclosed. References: https://opendata.smhi.se/metfcst/snow1gv1/ and https://www.smhi.se/data/om-smhis-data/villkor-for-anvandning. `node checks/smhi.mjs` covers normalization, missing values, time gaps, point dispatcher isolation, wind/wave independence, four-source UI and blocking an unavailable wave selection.

@@ -20,7 +20,7 @@ for(const model of Object.keys(MODELS)){state.model=model;assert(windAt(0,'wind_
 state.compare=true;el('forecast-legend').append=()=>{};sandbox.document.querySelector=()=>({append(){}});renderChart();assert(el('chartContent').innerHTML.includes('#a18ac8'));
 state.windGrid[state.model]=[{lat:57,lon:20,series:{hourly:{time:state.times,wind_speed_10m:[10,12],wind_direction_10m:[90,90]}}}];const s=sample(57,20);assert.equal(s.value,10);assert(s.u<-.99);assert(Math.abs(s.v)<.01);assert.equal(sample(65,11),null);
 state.layer='wave';state.waveGrid=[{lat:57,lon:20,series:state.wave[0]}];assert.equal(sample(57,20).value,0);assert.equal(color(0).length,3);
-const requests=Object.fromEntries(Object.keys(MODELS).map(m=>[m,url('https://api.open-meteo.com/v1/forecast',PORTS,{hourly:'wind_speed_10m,wind_gusts_10m,wind_direction_10m',models:m,wind_speed_unit:'ms',cell_selection:'nearest'})]));
+const requests=Object.fromEntries(Object.keys(MODELS).filter(m=>m!=='smhi_snow').map(m=>[m,url('https://api.open-meteo.com/v1/forecast',PORTS,{hourly:'wind_speed_10m,wind_gusts_10m,wind_direction_10m',models:m,wind_speed_unit:'ms',cell_selection:'nearest'})]));
 requests.wave=url('https://marine-api.open-meteo.com/v1/marine',PORTS,{hourly:'wave_height,wave_direction,wave_period',models:'ecmwf_wam',cell_selection:'sea'});
 requests.wavegrid=url('https://marine-api.open-meteo.com/v1/marine',grid('wave'),{hourly:'wave_height,wave_direction,wave_period',models:'ecmwf_wam',cell_selection:'sea'});
 fs.writeFileSync('/tmp/baltic-api-requests.json',JSON.stringify(requests));
