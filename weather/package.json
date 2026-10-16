@@ -8,9 +8,6 @@
     "deploy": "wrangler deploy",
     "build:check": "wrangler deploy --dry-run --outdir .wrangler/dry-run"
   },
-  "dependencies": {
-    "jose": "6.2.12"
-  },
   "devDependencies": {
     "wrangler": "4.151.0"
   }
