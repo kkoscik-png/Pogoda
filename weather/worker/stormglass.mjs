@@ -10,7 +10,7 @@ export function normalizeStormglass(data,point,saved){
  return {latitude:point.lat,longitude:point.lon,provider:'Stormglass',source:SOURCE,saved,hourly:{time:rows.map(r=>Date.parse(r.time)/1000),wave_height:rows.map(r=>value(r,'waveHeight')),wave_direction:rows.map(r=>value(r,'waveDirection',360)),wave_period:rows.map(r=>value(r,'wavePeriod'))}};
 }
 export function createStormglassAPI({fetcher=(...args)=>fetch(...args),cache=null,now=()=>Date.now()}={}){
- const inflight=new Map();
+ const inflight=new Map(),memory=new Map();
  return async function handleStormglass(request,env,ctx={}){
   const url=new URL(request.url);if(!url.pathname.startsWith('/api/stormglass/'))return null;
   if(request.method!=='GET')return json({error:'Metoda niedozwolona.'},405);
@@ -25,8 +25,9 @@ export function createStormglassAPI({fetcher=(...args)=>fetch(...args),cache=nul
   const activeCache=cache||(typeof caches!=='undefined'?caches.default:null),points=all.slice(offset,offset+5);let records=[];
   try{records=await Promise.all(points.map(async point=>{
    const key=new Request(url.origin+'/__stormglass_cache/v1/'+group+'/'+point.id);
-   const hit=activeCache?await activeCache.match(key):null;
-   if(hit)return hit.json();
+   const local=memory.get(key.url);if(local&&now()-local.saved<TTL*1000)return local;
+   let hit=null;if(activeCache){try{hit=await activeCache.match(key)}catch{}}
+   if(hit){const record=await hit.json();memory.set(key.url,record);return record;}
    const cacheKey=key.url;
    if(!inflight.has(cacheKey))inflight.set(cacheKey,(async()=>{
     const start=Math.floor(now()/86400000)*86400,end=start+5*86400;
@@ -34,11 +35,11 @@ export function createStormglassAPI({fetcher=(...args)=>fetch(...args),cache=nul
     const response=await fetcher(target.toString(),{headers:{Authorization:env.STORMGLASS_API_KEY},signal:AbortSignal.timeout(25000)});
     if(!response.ok){const error=new Error('upstream');error.status=response.status;throw error;}
     const record={id:point.id,...normalizeStormglass(await response.json(),point,now())};
-    if(activeCache){const cached=new Response(JSON.stringify(record),{headers:{'Content-Type':'application/json','Cache-Control':'public, max-age='+TTL}});await activeCache.put(key,cached);}
+    memory.set(key.url,record);if(activeCache){const cached=new Response(JSON.stringify(record),{headers:{'Content-Type':'application/json','Cache-Control':'public, max-age='+TTL}});try{await activeCache.put(key,cached)}catch{};}
     return record;
    })().finally(()=>inflight.delete(cacheKey)));
    return inflight.get(cacheKey);
-  }));}catch(error){const status=error.status===429?429:error.status===401||error.status===403?502:502;return json({error:error.status===429?'Limit zapytań Stormglass został osiągnięty.':error.status===401||error.status===403?'Stormglass odrzucił klucz lub uprawnienia.':'Nie udało się pobrać prognozy Stormglass.'},status);}
+  }));}catch(error){console.warn('stormglass_adapter',error.name,error.status||0,String(error.message||'').replace(env.STORMGLASS_API_KEY,'[redacted]'));const status=error.status===429?429:error.status===401||error.status===403?502:502;return json({error:error.status===429?'Limit zapytań Stormglass został osiągnięty.':error.status===401||error.status===403?'Stormglass odrzucił klucz lub uprawnienia.':'Nie udało się pobrać prognozy Stormglass.'},status);}
   return json({records,source:SOURCE,group,nextOffset:offset+points.length<all.length?offset+points.length:null,total:all.length,cacheHours:6});
  };
 }
