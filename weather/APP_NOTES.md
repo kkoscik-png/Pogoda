@@ -61,3 +61,11 @@ The prior diagonal missing segment near Ventspils came from applying a very coar
 Wind sampling now has 41 points: 23 regional sea samples plus 18 local samples on 3×3 grids around Ventspils and Norvik, including inland positions. Waves continue using the separate 23-point sea grid. The new atmospheric-grid cache suffix prevents reuse of the prior sea-only sample response. This adds local support for interpolation, without changing any model's native resolution. Port chart requests and coordinates are unchanged.
 
 `node checks/coverage.mjs` checks the city boundary, all exact point locations, inland rendered pixels and particle fields, no land erasure for wind/gusts, and correct sea-only wave rendering. All three atmospheric APIs were checked against the expanded 41-point request. Full browser visual QA remains unavailable.
+
+## Numeric route-wave corridor
+
+The map shows direct hourly ECMWF WAM significant-wave-height (Hs) values in metres along an indicative great-circle axis from BW Ventspils to Norvik Berth, with offsets of ±15 nautical miles (27.78 km each side; 30 NM total width). This is an indicative axis rather than an imported ship track. Nine interior cross-sections contain 27 sea query positions; labels use direct Open-Meteo marine records, independently of the interpolated regional colour field. The returned model-cell coordinates are retained in each label title.
+
+The numeric overlay is initially on for wind, gust and wave layers alike. The shared hour selector, table clicks, keyboard and playback update the values and the sampled min–max readout. A toggle hides the corridor and numbers; the adjacent fit button frames the whole corridor. Label collisions are suppressed at smaller zooms and recomputed on pan/zoom/resize without further API requests. Missing values show a dash, calm zero remains 0.0, and cached stale records remain labeled. Refresh includes the corridor request, using the existing 30-minute cache / six-hour failure fallback.
+
+`node checks/route-waves.mjs` verifies the ±15 NM geometry, both axis endpoints, hourly values, zero/null/stale cases, colour-layer independence and label spacing. Full browser visual QA remains unavailable in this environment.
