@@ -19,7 +19,7 @@ export async function loadCopernicus(points, { getJSON, getBuffer, now }) {
     const a = meta[axis + '/.zarray'], reader = bloscReader(await getBuffer(root + axis + '/0', 86400));
     axes[axis] = Array.from({length:a.shape[0]}, (_,i) => reader.number(i));
   }
-  const start = Math.floor(now / 3600000) * 3600000, times = Array.from({length:72}, (_,i) => start / 1000 + i * 3600);
+  const start = Math.floor(now / 3600000) * 3600000 - 3600000, times = Array.from({length:73}, (_,i) => start / 1000 + i * 3600);
   const t0 = Math.round((start - dims.time.coords.min) / 3600000);
   const nearest = (values, x) => values.reduce((best,v,i) => Math.abs(v-x) < Math.abs(values[best]-x) ? i : best, 0);
   const locations = points.map(p => ({...p, x:nearest(axes.longitude,p.lon), y:nearest(axes.latitude,p.lat)}));
