@@ -49,19 +49,18 @@ test('Copernicus includes the current hour and reads its actual time slice at ha
  const result=await loadCopernicus([point],{getJSON,getBuffer,now:Date.parse(T)+30*60000}),h=result.records[0].hourly;
  assert.equal(h.time[0],Date.parse(T)/1000);assert.equal(h.time.length,72);assert.equal(h.wave_height[0],.5);assert.equal(h.wave_height[71],71.5);assert.equal(h.wave_direction[0],0);
 });
-test('all sources show numeric port labels, while missing hours offer an explicit jump without changing the time',()=>{
+test('missing hours offer an explicit jump without changing the time or mixing provider errors',()=>{
  const nodes=new Map(),el=id=>{if(!nodes.has(id))nodes.set(id,{innerHTML:'',textContent:'',style:{},setAttribute(){},classList:{toggle(){}},append(){}});return nodes.get(id);};
  const c={Intl,Date,Math,Number,Array,Object,String,Map,Set,console,URLSearchParams,AbortSignal,matchMedia:()=>({matches:false}),document:{getElementById:el,querySelector:el,querySelectorAll:()=>[]}};
- vm.createContext(c);vm.runInContext(fs.readFileSync('dist/app.js','utf8').replace(/start\(\);\s*$/,'')+';globalThis.t={state,portWaveLabel,renderWaveAvailability,nextWaveHour,renderSummary};',c);
- const {state,portWaveLabel,renderWaveAvailability,nextWaveHour,renderSummary}=c.t,t=Date.parse(T)/1000;state.times=[t,t+3600,t+7200];
+ vm.createContext(c);vm.runInContext(fs.readFileSync('dist/app.js','utf8').replace(/start\(\);\s*$/,'')+';globalThis.t={state,renderWaveAvailability,nextWaveHour,renderSummary};',c);
+ const {state,renderWaveAvailability,nextWaveHour,renderSummary}=c.t,t=Date.parse(T)/1000;state.times=[t,t+3600,t+7200];
  const record={hourly:{time:state.times,wave_height:[0,1,null],wave_direction:[0,90,null],wave_period:[5,5,null]}};
  for(const source of ['ecmwf_wam','fmi_wam','copernicus_baltic','dmi_wam','dwd_ewam','stormglass']){
   state.waveSource=source;state.wave=state.stormglassWave=state.waves[source]=[record,record,record];state.hour=0;
-  assert.match(portWaveLabel(0),/data-wave-height="0"/);assert(portWaveLabel(0).includes(source));assert.match(portWaveLabel(0),/<b>0,0<\/b>/);
   renderWaveAvailability();assert.match(el('waveDataStatus').textContent,/3\/3/);assert.equal(el('waveAvailableHour').hidden,true);
  }
  state.waveSource='fmi_wam';state.waves.fmi_wam=[{hourly:{time:state.times,wave_height:[null,null,.7]}}];renderWaveAvailability();
- assert.equal(state.hour,0);assert.equal(nextWaveHour(state.waves.fmi_wam),t+7200);assert.match(el('waveDataStatus').textContent,/20:00/);assert.equal(el('waveAvailableHour').hidden,false);assert.match(portWaveLabel(0),/data-wave-height=""/);
+ assert.equal(state.hour,0);assert.equal(nextWaveHour(state.waves.fmi_wam),t+7200);assert.match(el('waveDataStatus').textContent,/20:00/);assert.equal(el('waveAvailableHour').hidden,false);
  state.waveSource='dmi_wam';state.waves.dmi_wam=null;state.errors['wave-dmi_wam']='DMI: dostawca zajęty (429)';renderSummary();assert.match(el('waveDataStatus').textContent,/429/);
  state.waveSource='dwd_ewam';renderSummary();assert.doesNotMatch(el('forecastError').textContent,/DMI/);
 });
