@@ -45,3 +45,15 @@ Logowanie Wrangler służy zarządzaniu kontem Cloudflare. Odwiedzający stronę
 - Domeny `workers.dev` oraz podglądy pozostają wyłączone.
 
 Sprawdzenie lokalne: `npm test` oraz `npm run build:check`. Szczegóły funkcji aplikacji: [APP_NOTES.md](APP_NOTES.md).
+
+## Dodatkowe modele i terminy aktualizacji (18.10.2026)
+
+Lista wiatru zachowuje ECMWF IFS, ICON-EU, ICON Global i SMHI SNOW; dodano DMI HARMONIE DINI. Lista fal zachowuje ECMWF WAM, Stormglass AI i dotychczasową nieaktywną pozycję SMHI SWAN; dodano FMI WAM, DMI WAM, DWD EWAM i Copernicus Baltic WAM. Nowe modele pobierają dane dopiero po wybraniu. Każdy ma niezależne dane portów, mapy i 59 próbek trasy.
+
+Pod każdą listą są osobne terminy ostatniej i przewidywanej następnej aktualizacji w strefie Europe/Stockholm. DMI podaje czas cyklu; FMI i Copernicus publikacji; Open-Meteo metadane dostępności. Stormglass nie publikuje jednego czasu cyklu mieszanki: pokazujemy faktyczne pobranie i termin odnowienia sześciogodzinnej pamięci. Godzina pobrania nie jest przedstawiana jako czas uruchomienia modelu. Po minięciu przewidywanego terminu pozostaje informacja o oczekiwaniu; nie przesuwamy pozornie czasu prognozy.
+
+`/api/forecast` przyjmuje tylko ustalone modele i grupy punktów aplikacji. Dane DMI i FMI mają CC BY 4.0. Copernicus Baltic WAM korzysta z publicznego oficjalnego zbioru ARCO/Zarr, bez danych logowania w przeglądarce i bez dodatkowego sekretu. Aktualną wersję zbioru wybieramy z oficjalnego STAC, pomijając wersje przyszłe i wycofane. Wszystkie nowe bezpośrednie adaptery działają bez płatnego planu. Warunki istniejących Open-Meteo i Stormglass pozostają bez zmian.
+
+Punkty leżące na modelowej masce lądu mogą użyć pobliskiego punktu morskiego tego samego modelu; jego współrzędne i odległość są widoczne w szczegółach. Brakujące godziny i wartości pozostają brakujące. FMI/Copernicus używają okresu szczytowego Tp, DMI WAM okresu średniego. Błędy lub przeciążenie DMI są jawne; nie zastępujemy jego wyników danymi innego modelu.
+
+Weryfikacja: `npm test` (dotychczasowe kontrole i nowe testy adapterów, wyboru źródła, czasu szwedzkiego oraz niezależne próbki kompresji Blosc/LZ4) i `npm run build:check`.

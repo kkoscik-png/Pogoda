@@ -97,3 +97,14 @@ The supplied key was verified with one live 73-hour request at 58.2°N, 19.7°E.
 ## Stormglass map readouts
 
 Selecting Stormglass adds the selected hour's significant wave height and propagation arrow to all three port map labels, including when the map displays wind. These readouts work without the 59-point route option. Zero height is preserved; missing hours, loading, failed requests and quota exhaustion are explicit. The regional Stormglass field still requires an explicitly enabled route and adequate provider quota; no WAM values are substituted. Regression checks cover all three labels, hourly values/directions, missing data and source switching.
+
+
+## Regional forecast providers and model publication clocks — 2026-10-18
+
+Added server-side adapters in worker/forecast.mjs for FMI WAM, DMI WAM and HARMONIE DINI, and Copernicus Baltic WAM. Added DWD EWAM via the existing Open-Meteo Marine endpoint. Fixed coordinate groups include ports, the existing 59-point route corridor, and the existing regional wind/wave samples; no arbitrary URL or coordinate proxy is provided. Batches and cache/in-flight deduplication bound upstream work.
+
+Copernicus is read directly from the official public STAC and geo-chunked Zarr store. Active dataset selection respects release/retirement dates. The small Blosc/LZ4 reader decodes only requested blocks to avoid decompressing entire multi-month grids in a Worker. Tests use fixtures compressed independently with numcodecs, and every decoded float is checked. The official data and metadata endpoints were fetched anonymously; live forecasts returned 72 populated hours for all three port cells.
+
+Frontend caches, port records, map fields, route fields and timing metadata are keyed by source. Model selectors cannot display another source's cached forecasts. Update clocks use Europe/Stockholm, actual availability/publication/reference metadata as labeled, and explicitly estimated next times. Stormglass retains its existing runtime secret and quota-gated route behavior.
+
+FMI WAM uses one explicit request per location: repeated latlon parameters proved unreliable in live responses and are not used. Harbour land-mask samples use verified nearby sea queries within the same model and disclose their query coordinates. Unknown values, missing hours, unavailable horizons, and provider errors are not filled with another model. DMI was intermittently returning HTTP 429/server busy during live validation; the adapter retries once and keeps failures explicit.

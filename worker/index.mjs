@@ -1,4 +1,5 @@
 import { handleStormglass } from './stormglass.mjs';
+import { handleForecast } from './forecast.mjs';
 
 const deny = (message, status) => new Response(message, {
   status,
@@ -12,6 +13,8 @@ export function createHandler() {
     if (!env.ASSETS?.fetch) return deny('Aplikacja oczekuje na dokończenie wdrożenia.', 503);
     const api = await handleStormglass(request, env, ctx);
     if (api) return api;
+    const forecast = await handleForecast(request, env, ctx);
+    if (forecast) return forecast;
     const asset = await env.ASSETS.fetch(request);
     const response = new Response(asset.body, asset);
     response.headers.set('Cache-Control', 'no-store');

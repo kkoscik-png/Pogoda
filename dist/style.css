@@ -20,3 +20,8 @@
 .wave-source{display:block;width:100%;margin-top:12px;padding:10px 8px;border:1px solid #d3e1e6;border-radius:6px;background:#f7fafb;color:#214c5c;font:inherit;font-size:11px}.model-tabs{flex-wrap:wrap}.model-tabs button{min-width:42px}.chart-content,.loading{min-height:501px}
 
 .pin-weather-label .pin-wave{display:flex;align-items:center;gap:4px;margin-top:6px;padding-top:5px;border-top:1px solid #9bbfce45;color:#a9e7ff;font-variant-numeric:tabular-nums;white-space:nowrap}.pin-wave>span:first-child{font-size:9px;color:#b8ced9}.pin-wave b{font-size:18px;font-weight:700}.pin-wave small{font-size:8px;margin-left:2px;color:#9eb6c2}.pin-wave.missing{color:#acc0c9}.pin-weather-label .pin-wave-message{display:block;font-size:8px;color:#e8cd94;margin-top:3px}
+
+/* Independent model selectors and Swedish forecast publication times. */
+.model-updates{margin:9px 0 11px;padding:9px 10px;border:1px solid #dbe6e8;border-radius:8px;background:#f5f8f8;font-size:10px;line-height:1.55;color:#536d78;overflow-wrap:anywhere}.model-updates span{display:block}.model-updates b{font-weight:600;color:#264653}.model-updates small{display:block;font-size:10px}.update-delayed{color:#916422}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}#windSource{margin-top:8px}.model-tabs{margin-top:8px}
+.model-label.wave-model-label>span{white-space:normal;overflow-wrap:anywhere;line-height:1.15}
+@media(max-width:900px){.sidebar-block{flex-wrap:wrap;align-items:flex-start;gap:7px}.sidebar-block>.section-eyebrow{width:100%}.sidebar-block>.wave-source,.sidebar-block>.model-updates{flex:1 1 100%;width:100%;min-width:0}.sidebar-block>.model-updates{margin:0}.sidebar-block>.model-tabs{width:100%}}
