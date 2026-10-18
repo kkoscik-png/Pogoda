@@ -24,5 +24,5 @@ test('Stormglass port map labels show hourly height and direction even with rout
  state.times.push(state.times[1]+3600);state.hour=2;assert.match(markerIcon(0).html,/Brak danych na tę godzinę/);assert.match(stormglassMapStatus(),/0\/3/);
  state.stormglassLoading=true;assert.match(markerIcon(1).html,/Pobieranie/);assert.match(stormglassMapStatus(),/pobieranie/);
  state.stormglassLoading=false;state.errors.stormglass='Stormglass: osiągnięto dzienny limit zapytań.';assert.match(markerIcon(2).html,/Dane niedostępne/);assert.match(stormglassMapStatus(),/limit/);
- state.waveSource='ecmwf_wam';assert.doesNotMatch(markerIcon(0).html,/pin-wave/);
+ state.waveSource='ecmwf_wam';assert.match(markerIcon(0).html,/data-wave-source="ecmwf_wam"/);assert.doesNotMatch(markerIcon(0).html,/Stormglass AI/);
 });

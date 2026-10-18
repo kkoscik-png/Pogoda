@@ -58,7 +58,7 @@ export function createForecastAPI({fetcher=(...args)=>fetch(...args),now=()=>Dat
   const memory=new Map(),pending=new Map();
   async function cached(key,ttl,load,ctx={}) {
     const old=memory.get(key);if(old&&now()-old.saved<ttl*1000)return old.value;
-    const storage=cache||(typeof caches!=='undefined'?caches.default:null),request=new Request('https://weather.seasync.co/__forecast_cache/v2/'+encodeURIComponent(key));
+    const storage=cache||(typeof caches!=='undefined'?caches.default:null),request=new Request('https://weather.seasync.co/__forecast_cache/v3/'+encodeURIComponent(key));
     if(storage&&ttl){const hit=await storage.match(request);if(hit){const value=await hit.json();memory.set(key,{saved:now(),value});return value;}}
     if(!pending.has(key))pending.set(key,(async()=>{const value=await load();if(ttl){if(memory.size>180)memory.delete(memory.keys().next().value);memory.set(key,{saved:now(),value});if(storage){const task=storage.put(request,new Response(JSON.stringify(value),{headers:{'Content-Type':'application/json','Cache-Control':'public, max-age='+ttl}}));if(ctx.waitUntil)ctx.waitUntil(task);else await task;}}return value;})().finally(()=>pending.delete(key)));
     return pending.get(key);
@@ -67,7 +67,8 @@ export function createForecastAPI({fetcher=(...args)=>fetch(...args),now=()=>Dat
   const getJSON=(url,ttl=300)=>cached(url,ttl,async()=>await(await response(url)).json());
   const getBuffer=async url=>await(await response(url)).arrayBuffer();
   async function fetchModel(model,points,group) {
-    const start=iso(Math.ceil(now()/HOUR)*HOUR),end=iso(Math.ceil(now()/HOUR)*HOUR+72*HOUR);
+    // The UI starts at the current full hour. Rounding up silently omitted it.
+    const start=iso(Math.floor(now()/HOUR)*HOUR),end=iso(Math.floor(now()/HOUR)*HOUR+71*HOUR);
     if(model==='copernicus_baltic')return loadCopernicus(points,{getJSON,getBuffer,now:now()});
     if(model==='fmi_wam'){
       // The documented stored query accepts one location. Repeated latlon
