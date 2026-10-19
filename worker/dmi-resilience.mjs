@@ -1,29 +1,32 @@
 const HOUR=3600000, RETAIN=48*HOUR;
 
-// Keep the last successful response across hour boundaries and Worker instances.
-export function createLastGoodCache({now=()=>Date.now(),cache=null}={}){
+export function forecastRefreshAfter(value){
+ const saved=Number(value.saved),next=Date.parse(value.refreshAfter||value.timing?.nextUpdate);
+ return Number.isFinite(next)&&next>saved?next:saved+15*60000;
+}
+// Forecasts and their update schedules stay on the server until the next cycle.
+export function createLastGoodCache({now=()=>Date.now(),cache=null,usable=value=>Array.isArray(value?.records)&&value.records.some(r=>r.hourly?.time?.length)}={}){
  const memory=new Map(),pending=new Map(),storage=()=>cache||(typeof caches!=='undefined'?caches.default:null);
- const usable=value=>value?.records?.some(r=>r.hourly?.time?.some((t,i)=>t>=Math.floor(now()/HOUR)*3600-3600&&Number.isFinite((r.hourly.wind_speed_10m||r.hourly.wave_height||[])[i])));
- return async function lastGood(key,load,fallback=null){
+ const requestFor=key=>new Request('https://weather.seasync.co/__forecast_cycles/v1/'+encodeURIComponent(key));
+ async function read(key){let value=memory.get(key);const store=storage();if(!value&&store){try{let hit=await store.match(requestFor(key));if(!hit&&key.startsWith('dmi_'))hit=await store.match(new Request('https://weather.seasync.co/__dmi_last_good/v1/'+encodeURIComponent(key)));if(hit)value=await hit.json();}catch{}}return value;}
+ async function save(key,value){if(memory.size>=180)memory.delete(memory.keys().next().value);memory.set(key,value);const store=storage();if(store){try{await store.put(requestFor(key),new Response(JSON.stringify(value),{headers:{'Content-Type':'application/json','Cache-Control':'public, max-age='+RETAIN/1000}}));}catch{}}return value;}
+ async function lastGood(key,load,fallback=null){
   if(pending.has(key))return pending.get(key);
   const job=(async()=>{
-   const store=storage(),request=new Request('https://weather.seasync.co/__dmi_last_good/v1/'+encodeURIComponent(key));
-   let old=memory.get(key);if(!old&&store){const hit=await store.match(request);if(hit)old=await hit.json();}
-   if(old&&now()-old.saved<HOUR&&usable(old))return old;
+   const old=await read(key);
+   if(old&&now()<forecastRefreshAfter(old)&&usable(old))return old;
    let value;
    try{value=await load();}
    catch(error){
-    if(old&&now()-old.saved<RETAIN&&usable(old))return {...old,stale:true,checkedAt:now(),notice:'Ostatnia dobra prognoza — może być nieaktualna.'};
-    if(!fallback)throw error;
-    value=await fallback(error);
+    if(old&&now()-old.saved<RETAIN&&usable(old))return save(key,{...old,stale:true,checkedAt:now(),refreshAfter:new Date(now()+Math.max(15*60000,(error.retryAfter||0)*1000)).toISOString(),notice:'Ostatnia dobra prognoza — może być nieaktualna.'});
+    if(!fallback)throw error;value=await fallback(error);
    }
-   if(!usable(value))throw Error('Brak użytecznych danych prognozy DMI.');
-   value={...value,saved:value.saved??now(),checkedAt:now(),stale:false};
-   if(memory.size>=180)memory.delete(memory.keys().next().value);memory.set(key,value);
-   if(store)await store.put(request,new Response(JSON.stringify(value),{headers:{'Content-Type':'application/json','Cache-Control':'public, max-age='+RETAIN/1000}}));
-   return value;
+   if(!usable(value))throw Error('Brak użytecznych danych prognozy.');
+   value={...value,saved:value.saved??now(),checkedAt:now(),stale:false};value.refreshAfter=new Date(forecastRefreshAfter(value)).toISOString();
+   return save(key,value);
   })().finally(()=>pending.delete(key));pending.set(key,job);return job;
- };
+ }
+ lastGood.peek=read;return lastGood;
 }
 
 export function normalizeDMIOpenMeteo(data,points,fetchedAt=Date.now()){
@@ -40,5 +43,5 @@ export function normalizeDMIOpenMeteo(data,points,fetchedAt=Date.now()){
   if(!hourly.wind_speed_10m.some(v=>v!==null))throw Error('Brak wiatru w prognozie zapasowej Open-Meteo.');
   return {id:points[i].id,latitude:row.latitude,longitude:row.longitude,provider:'DMI / ECMWF via Open-Meteo',model:'DMI Seamless (DMI + ECMWF)',hourly};
  });
- return {records,saved:fetchedAt,timing:{updatedAt:new Date(fetchedAt).toISOString(),nextUpdate:new Date(fetchedAt+HOUR).toISOString(),referenceTime:null,basis:'fetch',estimated:true},delivery:'open-meteo',blend:true,notice:'Źródło zapasowe: Open-Meteo · DMI Seamless (DMI + ECMWF).',attribution:'DMI, ECMWF / Open-Meteo, CC BY 4.0'};
+ return {records,saved:fetchedAt,timing:{updatedAt:new Date(fetchedAt).toISOString(),nextUpdate:new Date(fetchedAt+3*HOUR).toISOString(),referenceTime:null,basis:'fetch',estimated:true},delivery:'open-meteo',blend:true,notice:'Źródło zapasowe: Open-Meteo · DMI Seamless (DMI + ECMWF).',attribution:'DMI, ECMWF / Open-Meteo, CC BY 4.0'};
 }

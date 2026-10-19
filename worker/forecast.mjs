@@ -1,10 +1,11 @@
+import { normalizeOpenWeather, normalizeSnow } from './open-weather.mjs';
 import { createLastGoodCache, normalizeDMIOpenMeteo } from './dmi-resilience.mjs';
 import { STORMGLASS_POINTS } from './stormglass-points.mjs';
 import { FORECAST_GRIDS } from './forecast-points.mjs';
 import { loadCopernicus, copernicusDataset } from './copernicus.mjs';
 const HOUR=3600000, BATCH=6;
-const SOURCES={fmi_wam:{interval:6*HOUR},dmi_wam:{interval:6*HOUR,collection:'wam_nsb'},dmi_harmonie:{interval:3*HOUR,collection:'harmonie_dini_sf'},copernicus_baltic:{interval:12*HOUR}};
-const METADATA={ecmwf_ifs:['https://api.open-meteo.com','ecmwf_ifs'],icon_eu:['https://api.open-meteo.com','dwd_icon_eu'],icon_global:['https://api.open-meteo.com','dwd_icon'],ecmwf_wam:['https://marine-api.open-meteo.com','ecmwf_wam'],dwd_ewam:['https://marine-api.open-meteo.com','dwd_ewam']};
+const SOURCES={ecmwf_ifs:{interval:6*HOUR},icon_eu:{interval:3*HOUR},icon_global:{interval:6*HOUR},ecmwf_wam:{interval:6*HOUR},dwd_ewam:{interval:6*HOUR},smhi_snow:{interval:900000},fmi_wam:{interval:6*HOUR},dmi_wam:{interval:6*HOUR,collection:'wam_nsb'},dmi_harmonie:{interval:3*HOUR,collection:'harmonie_dini_sf'},copernicus_baltic:{interval:12*HOUR}};
+const METADATA={dmi_harmonie:['https://api.open-meteo.com','dmi_harmonie_arome_europe'],ecmwf_ifs:['https://api.open-meteo.com','ecmwf_ifs'],icon_eu:['https://api.open-meteo.com','dwd_icon_eu'],icon_global:['https://api.open-meteo.com','dwd_icon'],ecmwf_wam:['https://marine-api.open-meteo.com','ecmwf_wam'],dwd_ewam:['https://marine-api.open-meteo.com','dwd_ewam']};
 const GROUPS={ports:STORMGLASS_POINTS.ports,route:STORMGLASS_POINTS.route,'wind-grid':FORECAST_GRIDS.windGrid.map((p,i)=>({...p,id:String(i)})),'wave-grid':FORECAST_GRIDS.waveGrid.map((p,i)=>({...p,id:String(i)}))};
 const json=(value,status=200,extraHeaders={})=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff',...extraHeaders}});
 const numeric=(x,max=Infinity)=>typeof x==='number'&&Number.isFinite(x)&&x>=0&&x<=max?x:null;
@@ -94,10 +95,10 @@ export function normalizeDMIGeoJSON(data,points,model,referenceTime=null,fetched
  return {records,timing:Number.isFinite(Date.parse(referenceTime))?dmiTiming(referenceTime,model):modelTiming(iso(fetchedAt),HOUR,null,'fetch'),attribution:'Danish Meteorological Institute, CC BY 4.0'};
 }
 export function createForecastAPI({fetcher=(...args)=>fetch(...args),now=()=>Date.now(),cache=null,pause}={}) {
-  const memory=new Map(),pending=new Map(),dmiTimings=new Map(),dmiResponse=createDMIRequester({fetcher,now,cache,pause}),lastGood=createLastGoodCache({now,cache});
+  const memory=new Map(),pending=new Map(),dmiTimings=new Map(),dmiResponse=createDMIRequester({fetcher,now,cache,pause}),lastGood=createLastGoodCache({now,cache}),schedules=createLastGoodCache({now,cache,usable:v=>Number.isFinite(Date.parse(v?.timing?.updatedAt))});
   async function cached(key,ttl,load,ctx={}) {
     const old=memory.get(key);if(old&&now()-old.saved<ttl*1000)return old.value;
-    const storage=cache||(typeof caches!=='undefined'?caches.default:null),request=new Request('https://weather.seasync.co/__forecast_cache/v8/'+encodeURIComponent(key));
+    const storage=cache||(typeof caches!=='undefined'?caches.default:null),request=new Request('https://weather.seasync.co/__forecast_cache/v9/'+encodeURIComponent(key));
     if(storage&&ttl){const hit=await storage.match(request);if(hit){const value=await hit.json();memory.set(key,{saved:now(),value});return value;}}
     if(!pending.has(key))pending.set(key,(async()=>{const value=await load();if(ttl){if(memory.size>180)memory.delete(memory.keys().next().value);memory.set(key,{saved:now(),value});if(storage){const task=storage.put(request,new Response(JSON.stringify(value),{headers:{'Content-Type':'application/json','Cache-Control':'public, max-age='+ttl}}));if(ctx.waitUntil)ctx.waitUntil(task);else await task;}}return value;})().finally(()=>pending.delete(key)));
     return pending.get(key);
@@ -105,7 +106,36 @@ export function createForecastAPI({fetcher=(...args)=>fetch(...args),now=()=>Dat
   async function response(url) {if(url.startsWith('https://opendataapi.dmi.dk/'))return dmiResponse(url);const r=await fetcher(url,{signal:AbortSignal.timeout(35000),headers:{Accept:'application/json, application/xml, */*'}});if(!r.ok){const e=Error('Źródło chwilowo niedostępne ('+r.status+')');e.status=r.status;throw e;}return r;}
   const getJSON=(url,ttl=300)=>cached(url,ttl,async()=>await(await response(url)).json());
   const getBuffer=async url=>await(await response(url)).arrayBuffer();
+  async function getSchedule(model,delivery='auto'){
+    return schedules(model+'/'+delivery,async()=>{
+      let timing;
+      if(model.startsWith('dmi_')&&delivery!=='open-meteo'){
+        const root='https://opendataapi.dmi.dk/v1/forecastedr/collections/'+SOURCES[model].collection,runs=await getJSON(root+'/instances',0);
+        const ids=runs.instances.map(r=>r.id).sort().reverse(),id=ids.find(id=>Date.parse(id.replace(/T(\d{2})(\d{2})(\d{2})Z$/,'T$1:$2:$3Z'))+165*60000<=now())||ids[0];
+        timing=dmiTiming(id.replace(/T(\d{2})(\d{2})(\d{2})Z$/,'T$1:$2:$3Z'),model);
+      }else if(model==='copernicus_baltic'){
+        const d=await copernicusDataset(url=>getJSON(url,0),now());timing=modelTiming(d.properties.admp_updated_data||d.properties.admp_updated,12*HOUR);
+      }else{
+        const [host,id]=METADATA[model],data=await getJSON(host+'/data/'+id+'/static/meta.json',0);
+        timing=modelTiming(iso(data.last_run_availability_time*1000),data.update_interval_seconds*1000,iso(data.last_run_initialisation_time*1000));
+      }
+      return {timing,saved:now()};
+    });
+  }
+  async function fetchOpenWeather(model,points,group){
+    const wave=['ecmwf_wam','dwd_ewam'].includes(model),host=wave?'https://marine-api.open-meteo.com/v1/marine':'https://api.open-meteo.com/v1/forecast';
+    const fields=wave?'wave_height,wave_direction,wave_period':'wind_speed_10m,wind_gusts_10m,wind_direction_10m'+(group==='ports'?',cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,precipitation':'');
+    const query={latitude:points.map(p=>p.lat).join(','),longitude:points.map(p=>p.lon).join(','),hourly:fields,models:model,timeformat:'unixtime',timezone:'UTC',start_hour:iso(Math.floor(now()/HOUR)*HOUR-HOUR).slice(0,16),end_hour:iso(Math.floor(now()/HOUR)*HOUR+95*HOUR).slice(0,16),cell_selection:wave?'sea':'nearest',...(!wave?{wind_speed_unit:'ms'}:{})};
+    const data=await(await response(host+'?'+new URLSearchParams(query))).json(),saved=now();let timing;
+    try{timing=(await getSchedule(model)).timing;}catch{timing=modelTiming(iso(saved),HOUR,null,'fetch');}
+    return {records:normalizeOpenWeather(data,points,model,wave),saved,timing,delivery:'open-meteo',attribution:(wave?'Marine forecasts':'Weather forecasts')+' / Open-Meteo, CC BY 4.0'};
+  }
   async function fetchModel(model,points,group) {
+    if(METADATA[model]&&!model.startsWith('dmi_'))return fetchOpenWeather(model,points,group);
+    if(model==='smhi_snow'){
+      const records=[];for(const p of points){const url='https://opendata-download-metfcst.smhi.se/api/category/snow1g/version/1/geotype/point/lon/'+p.lon+'/lat/'+p.lat+'/data.json';records.push(normalizeSnow(await(await response(url)).json(),p));}
+      const referenceTime=records.map(r=>r.referenceTime).filter(Boolean).sort()[0];return {records,saved:now(),timing:modelTiming(referenceTime,900000,referenceTime,'reference'),attribution:'SMHI Open Data, CC BY 4.0'};
+    }
     // Match the shared UI axis: previous full hour through 71 hours ahead.
     const start=iso(Math.floor(now()/HOUR)*HOUR-(model==='dmi_harmonie'?2:1)*HOUR),end=iso(Math.floor(now()/HOUR)*HOUR+71*HOUR);
     if(model==='copernicus_baltic')return loadCopernicus(points,{getJSON,getBuffer,now:now()});
@@ -144,38 +174,33 @@ export function createForecastAPI({fetcher=(...args)=>fetch(...args),now=()=>Dat
       const result=await cached(pointKey,3600,async()=>{const data=await(await response(url)).json(),saved=now(),result=sea?normalizeDMI(data,[p],model,null,saved):normalizeDMIGeoJSON(data,[p],model,null,saved);return {...result,saved};});
       records.push(...result.records);savedTimes.push(result.saved);
     }
-    const saved=Math.min(...savedTimes),timing=modelTiming(iso(saved),HOUR,null,'fetch');dmiTimings.set(model,timing);return {records,timing,saved,delivery:'dmi',attribution:'Danish Meteorological Institute, CC BY 4.0'};
+    const saved=Math.min(...savedTimes);let timing;try{timing=(await getSchedule(model)).timing;}catch{timing=modelTiming(iso(saved),SOURCES[model].interval,null,'fetch');}dmiTimings.set(model,timing);return {records,timing,saved,delivery:'dmi',attribution:'Danish Meteorological Institute, CC BY 4.0'};
   }
   async function fetchDMIFallback(points,group){
     const hour=Math.floor(now()/HOUR)*HOUR,fields=['wind_speed_10m','wind_gusts_10m','wind_direction_10m',...(group==='ports'?['temperature_2m','cloud_cover','cloud_cover_low','cloud_cover_mid','cloud_cover_high','precipitation']:[])];
-    const query={latitude:points.map(p=>p.lat).join(','),longitude:points.map(p=>p.lon).join(','),hourly:fields.join(','),models:'dmi_seamless',wind_speed_unit:'ms',temperature_unit:'celsius',timeformat:'unixtime',timezone:'UTC',start_hour:iso(hour-HOUR).slice(0,16),end_hour:iso(hour+72*HOUR).slice(0,16),cell_selection:'nearest'};
+    const query={latitude:points.map(p=>p.lat).join(','),longitude:points.map(p=>p.lon).join(','),hourly:fields.join(','),models:'dmi_seamless',wind_speed_unit:'ms',temperature_unit:'celsius',timeformat:'unixtime',timezone:'UTC',start_hour:iso(hour-HOUR).slice(0,16),end_hour:iso(hour+95*HOUR).slice(0,16),cell_selection:'nearest'};
     const result=await fetcher('https://api.open-meteo.com/v1/forecast?'+new URLSearchParams(query),{signal:AbortSignal.timeout(60000)});
     if(!result.ok)throw Object.assign(Error('Open-Meteo: HTTP '+result.status),{status:result.status});
-    const payload=normalizeDMIOpenMeteo(await result.json(),points,now());dmiTimings.set('dmi_harmonie',payload.timing);return payload;
+    const payload=normalizeDMIOpenMeteo(await result.json(),points,now());try{payload.timing=(await getSchedule('dmi_harmonie','open-meteo')).timing;}catch{}dmiTimings.set('dmi_harmonie',payload.timing);return payload;
   }
   return async function handleForecast(request,env,ctx={}) {
     const u=new URL(request.url);if(!['/api/forecast','/api/model-updates'].includes(u.pathname))return null;
     if(request.method!=='GET')return json({error:'Metoda niedozwolona.'},405);
     const model=u.searchParams.get('model');
     if(u.pathname==='/api/model-updates'){
-      if(model==='dmi_harmonie'||model==='dmi_wam'){
-        if(dmiTimings.has(model))return json({timing:dmiTimings.get(model),checkedAt:iso(now())});
-        try{const root='https://opendataapi.dmi.dk/v1/forecastedr/collections/'+SOURCES[model].collection;const runs=await getJSON(root+'/instances',300),instance=[...runs.instances].sort((a,b)=>b.id.localeCompare(a.id))[0];const referenceTime=instance.id.replace(/T(\d{2})(\d{2})(\d{2})Z$/,'T$1:$2:$3Z');return json({timing:dmiTiming(referenceTime,model),checkedAt:iso(now())});}catch(e){return json({error:e.status===429?'DMI jest przeciążone. Odczekaj przed kolejną próbą.':'Czas aktualizacji DMI chwilowo niedostępny.',...(e.retryAt?{retryAt:iso(e.retryAt),retryAfter:e.retryAfter}:{})},e.status===429?429:502,e.retryAfter?{'Retry-After':String(e.retryAfter)}:{});}
-      }
-      if(model==='copernicus_baltic'){
-        try{const d=await copernicusDataset(getJSON,now());return json({timing:modelTiming(d.properties.admp_updated_data||d.properties.admp_updated,12*HOUR),checkedAt:iso(now())});}catch{return json({error:'Czas aktualizacji Copernicus chwilowo niedostępny.'},502);}
-      }
-      if(!METADATA[model])return json({error:'Nieznany model.'},400);
-      try{const [host,id]=METADATA[model],data=await getJSON(host+'/data/'+id+'/static/meta.json',300);return json({timing:modelTiming(iso(data.last_run_availability_time*1000),data.update_interval_seconds*1000,iso(data.last_run_initialisation_time*1000)),checkedAt:iso(now())});}catch{return json({error:'Czas aktualizacji chwilowo niedostępny.'},502);}
+      if(!SOURCES[model])return json({error:'Nieznany model.'},400);
+      const snapshot=await lastGood.peek([model,'ports',0].join('/'));
+      if(snapshot&&now()<Date.parse(snapshot.refreshAfter))return json({timing:snapshot.timing,refreshAfter:snapshot.refreshAfter,checkedAt:iso(snapshot.checkedAt)});
+      if(model==='smhi_snow')return snapshot?json({timing:snapshot.timing,refreshAfter:snapshot.refreshAfter}):json({error:'Czas aktualizacji pojawi się po pobraniu prognozy.'},503);
+      try{const schedule=await getSchedule(model);return json({timing:schedule.timing,refreshAfter:schedule.refreshAfter,checkedAt:iso(schedule.saved)});}
+      catch(e){return json({error:'Czas aktualizacji chwilowo niedostępny.',...(e.retryAt?{retryAt:iso(e.retryAt),retryAfter:e.retryAfter}:{})},e.status===429?429:502,e.retryAfter?{'Retry-After':String(e.retryAfter)}:{});}
     }
     const group=u.searchParams.get('group')||'ports',text=u.searchParams.get('offset')||'0',points=GROUPS[group];
-    if(!SOURCES[model]||!points||!/^\d+$/.test(text))return json({error:'Nieprawidłowy model lub grupa.'},400);
+    if(!SOURCES[model]||!points||!/^\d+$/.test(text)||(model==='smhi_snow'&&group!=='ports'))return json({error:'Nieprawidłowy model lub grupa.'},400);
     const offset=Number(text);if(offset%BATCH||offset>=points.length||(group==='ports'&&offset))return json({error:'Nieprawidłowy zakres.'},400);
-    const selected=points.slice(offset,offset+BATCH),key=[model,group,offset,Math.floor(now()/HOUR)].join('/');
+    const selected=points.slice(offset,offset+BATCH);
     try {
-      const payload=model.startsWith('dmi_')
-        ?await lastGood([model,group,offset].join('/'),()=>fetchModel(model,selected,group),model==='dmi_harmonie'?()=>fetchDMIFallback(selected,group):null)
-        :await cached(key,1800,async()=>({...await fetchModel(model,selected,group),saved:now()}),ctx);
+      const payload=await lastGood([model,group,offset].join('/'),()=>fetchModel(model,selected,group),model==='dmi_harmonie'?()=>fetchDMIFallback(selected,group):null);
       return json({...payload,model,group,total:points.length,nextOffset:offset+selected.length<points.length?offset+selected.length:null});
     }catch(e){return json({error:e.status===429?(model.startsWith('dmi_')?'DMI jest przeciążone. Odczekaj '+e.retryAfter+' s przed kolejną próbą.':'Dostawca jest zajęty. Ponów pobieranie za chwilę.'):'Nie udało się pobrać modelu '+model+'.',model,...(e.retryAt?{retryAt:iso(e.retryAt),retryAfter:e.retryAfter}:{})},e.status===429?429:502,e.retryAfter?{'Retry-After':String(e.retryAfter)}:{});}
   };

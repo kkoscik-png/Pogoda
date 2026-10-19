@@ -43,3 +43,6 @@
 
 /* Keep the table labels aligned when the meteogram follows the comparison rows. */
 .model-label.wave-model-label{height:50px;border-top:2px solid #fff}
+
+/* The wind table is the single time control; the chart legend follows its plot. */
+.wind-table-toolbar{display:flex;align-items:center;gap:13px;padding:14px 18px;border-bottom:1px solid #e4ebed}.wind-table-toolbar .play{width:32px;height:32px;flex:none}.wind-table-toolbar>b{font-size:11px;color:#244a53;font-variant-numeric:tabular-nums}.wind-table-toolbar>span{font-size:9px;color:#8a9ca3}.wind-table-toolbar .textbtn{margin-left:auto;white-space:nowrap}.forecast>.forecast-legend{padding-top:15px;border-top:1px solid #e6edef}.chart-layout{border-top:0}.forecast{margin-top:18px}@media(max-width:760px){.wind-table-toolbar{padding:12px;gap:9px}.wind-table-toolbar>b{font-size:10px}.wind-table-toolbar>span{display:none}}

@@ -40,7 +40,8 @@ export function createStormglassAPI({fetcher=(...args)=>fetch(...args),cache=nul
    })().finally(()=>inflight.delete(cacheKey)));
    return inflight.get(cacheKey);
   }));}catch(error){console.warn('stormglass_adapter',error.name,error.status||0,String(error.message||'').replace(env.STORMGLASS_API_KEY,'[redacted]'));const status=error.status===429?429:error.status===401||error.status===403?502:502;return json({error:error.status===429?'Limit zapytań Stormglass został osiągnięty.':error.status===401||error.status===403?'Stormglass odrzucił klucz lub uprawnienia.':'Nie udało się pobrać prognozy Stormglass.'},status);}
-  return json({records,source:SOURCE,group,nextOffset:offset+points.length<all.length?offset+points.length:null,total:all.length,cacheHours:6});
+  const saved=Math.min(...records.map(r=>r.saved)),refreshAfter=new Date(saved+TTL*1000).toISOString();
+  return json({records,saved,refreshAfter,timing:{updatedAt:new Date(saved).toISOString(),nextUpdate:refreshAfter,basis:'fetch',estimated:true},source:SOURCE,group,nextOffset:offset+points.length<all.length?offset+points.length:null,total:all.length,cacheHours:6});
  };
 }
 export const handleStormglass=createStormglassAPI();
