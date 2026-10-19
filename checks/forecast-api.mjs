@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
-import {createForecastAPI,normalizeFMI,normalizeDMI,modelTiming} from '../worker/forecast.mjs';
+import {createForecastAPI,normalizeFMI,normalizeDMI,modelTiming,normalizeDMIGeoJSON,createDMIRequester} from '../worker/forecast.mjs';
 import {bloscReader} from '../worker/blosc.mjs';
 import {loadCopernicus} from '../worker/copernicus.mjs';
 const T='2026-10-18T16:00:00Z',point={id:'0',lat:58.3,lon:20};
@@ -88,4 +88,51 @@ test('DMI cloud fractions become percent and accumulated precipitation becomes e
  const h=normalizeDMI(data,[point],'dmi_harmonie',T).records[0].hourly;assert.deepEqual(h.cloud_cover,[50,0,100]);assert.deepEqual(h.cloud_cover_high,[100,0,50]);assert.deepEqual(h.precipitation,[null,.5,1.5]);
  data.ranges['total-precipitation'].values=[2,1,2];assert.deepEqual(normalizeDMI(data,[point],'dmi_harmonie',T).records[0].hourly.precipitation,[null,null,1]);
  data.domain.axes.t.values[2]='2026-10-18T20:00:00Z';assert.equal(normalizeDMI(data,[point],'dmi_harmonie',T).records[0].hourly.precipitation[2],null);
+});
+
+
+test('documented DMI GeoJSON preserves coordinates, hourly gaps, cloud units, zero and missing values',()=>{
+ const f=(step,properties)=>({type:'Feature',geometry:{type:'Point',coordinates:[20.01,58.31]},properties:{step,...properties}});
+ const data={type:'FeatureCollection',features:[f('2026-10-18T17:00:00Z',{'wind-speed-10m':4,'fraction-of-cloud-cover':.5,'total-precipitation':2.5}),f(T,{'wind-speed-10m':0,'wind-dir-10m':0,'gust-wind-speed-10m':null,'fraction-of-cloud-cover':0,'low-cloud-cover':0,'total-precipitation':2})]};
+ const result=normalizeDMIGeoJSON(data,[point],'dmi_harmonie',null,Date.parse(T)),r=result.records[0];assert.equal(r.longitude,20.01);assert.equal(r.latitude,58.31);assert.deepEqual(r.hourly.wind_speed_10m,[0,4]);assert.deepEqual(r.hourly.cloud_cover,[0,50]);assert.deepEqual(r.hourly.precipitation,[null,.5]);assert.equal(r.hourly.wind_gusts_10m[0],null);assert.equal(r.hourly.wind_direction_10m[0],0);assert.equal(result.timing.basis,'fetch');assert.equal(result.timing.referenceTime,null);
+ assert.throws(()=>normalizeDMIGeoJSON({type:'FeatureCollection',features:[]},[point],'dmi_harmonie'));
+});
+
+test('DMI uses complete-run collection position, GeoJSON, lon lat, filters and shared positive cache',async()=>{
+ let clock=Date.parse(T),calls=0;const urls=[],api=createForecastAPI({now:()=>clock,pause:async ms=>{clock+=ms;},fetcher:async url=>{
+  calls++;urls.push(url);const u=new URL(url);assert.equal(u.hostname,'opendataapi.dmi.dk');assert.equal(u.pathname,'/v1/forecastedr/collections/harmonie_dini_sf/position');assert.equal(u.searchParams.get('f'),'GeoJSON');assert.equal(u.searchParams.get('crs'),'crs84');assert(u.searchParams.get('parameter-name').includes('low-cloud-cover'));assert(u.searchParams.get('parameter-name').includes('total-precipitation'));assert(u.searchParams.get('datetime').startsWith('2026-10-18T14:00:00.000Z/'));
+  const [lon,lat]=u.searchParams.get('coords').slice(6,-1).split(' ').map(Number);assert(lon>17&&lon<22);assert(lat>57&&lat<60);assert(!u.searchParams.has('api-key'));
+  return new Response(JSON.stringify({type:'FeatureCollection',features:[{type:'Feature',geometry:{type:'Point',coordinates:[lon,lat]},properties:{step:T,'wind-speed-10m':3,'wind-dir-10m':90,'fraction-of-cloud-cover':.4}}]}));
+ }});
+ const request=()=>new Request('https://weather.seasync.co/api/forecast?model=dmi_harmonie&group=ports');const [a,b]=await Promise.all([api(request(),{}),api(request(),{})]);assert.equal(a.status,200);assert.equal(b.status,200);const d=await a.json();assert.equal(d.records.length,3);assert.equal(d.records[0].hourly.cloud_cover[0],40);assert.equal(calls,3);assert.equal((await api(request(),{})).status,200);assert.equal(calls,3);assert(clock-Date.parse(T)>=2000);
+});
+
+test('DMI serializes different requests and spaces starts by at least one second',async()=>{
+ let clock=0,active=0,maxActive=0;const starts=[];const request=createDMIRequester({now:()=>clock,pause:async ms=>{clock+=ms;},fetcher:async()=>{active++;maxActive=Math.max(maxActive,active);starts.push(clock);await Promise.resolve();active--;return new Response('{}');}});
+ await Promise.all([request('https://opendataapi.dmi.dk/a'),request('https://opendataapi.dmi.dk/b'),request('https://opendataapi.dmi.dk/c')]);assert.equal(maxActive,1);assert.deepEqual(starts,[0,1000,2000]);
+});
+
+test('DMI respects Retry-After and shares its cooldown across worker instances and groups',async()=>{
+ let clock=Date.parse(T),calls=0;const stored=new Map(),cache={async match(req){return stored.get(req.url)?.clone();},async put(req,res){stored.set(req.url,res.clone());}};
+ const options={cache,now:()=>clock,pause:async ms=>{clock+=ms;},fetcher:async()=>{calls++;return new Response('busy',{status:429,headers:{'Retry-After':'120'}});}};
+ const a=createForecastAPI(options),b=createForecastAPI(options),request=group=>new Request('https://weather.seasync.co/api/forecast?model=dmi_harmonie&group='+group);
+ const first=await a(request('ports'),{});assert.equal(first.status,429);assert.equal(first.headers.get('Retry-After'),'120');assert.equal((await first.json()).retryAt,'2026-10-18T16:02:00.000Z');assert.equal(calls,1);
+ const second=await b(request('wind-grid'),{});assert.equal(second.status,429);assert.equal(calls,1);clock+=121000;assert.equal((await b(request('ports'),{})).status,429);assert.equal(calls,2);
+});
+
+test('DMI server busy without Retry-After has a safe pause rather than a quick retry',async()=>{
+ let clock=Date.parse(T),calls=0;const api=createForecastAPI({now:()=>clock,fetcher:async()=>{calls++;return new Response('Server is busy',{status:429});}});const req=()=>new Request('https://weather.seasync.co/api/forecast?model=dmi_wam&group=ports');
+ const first=await api(req(),{});assert.equal(first.status,429);assert.equal(first.headers.get('Retry-After'),'60');assert.equal(calls,1);assert.equal((await api(req(),{})).status,429);assert.equal(calls,1);
+ const metadata=await api(new Request('https://weather.seasync.co/api/model-updates?model=dmi_wam'),{});assert.equal(metadata.status,429);assert.equal(calls,1);
+});
+
+test('DMI handles an HTTP date in Retry-After',async()=>{
+ const clock=Date.parse(T);let calls=0;const request=createDMIRequester({now:()=>clock,fetcher:async()=>{calls++;return new Response('busy',{status:429,headers:{'Retry-After':'Sun, 18 Oct 2026 16:03:00 GMT'}});}});
+ await assert.rejects(request('https://opendataapi.dmi.dk/a'),e=>e.status===429&&e.retryAfter===180);await assert.rejects(request('https://opendataapi.dmi.dk/b'),e=>e.status===429&&e.retryAfter===180);assert.equal(calls,1);
+});
+
+test('client respects the DMI server cooldown when another group is selected',async()=>{
+ let calls=0;const c={Date,Intl,Math,Number,Array,Object,String,Map,Set,console,URLSearchParams,AbortSignal,matchMedia:()=>({matches:false}),localStorage:{getItem(){return null;}},document:{getElementById:()=>({})},fetch:async()=>{calls++;return new Response(JSON.stringify({error:'DMI jest przeciążone',retryAt:new Date(Date.now()+120000).toISOString(),retryAfter:120}),{status:429});}};
+ vm.createContext(c);vm.runInContext(fs.readFileSync('dist/app.js','utf8').replace(/start\(\);\s*$/,'')+';globalThis.t={fetchProvider};',c);
+ await assert.rejects(c.t.fetchProvider('dmi_harmonie','ports'),e=>e.status===429);await assert.rejects(c.t.fetchProvider('dmi_harmonie','wind-grid'),e=>e.status===429);assert.equal(calls,1);
 });
