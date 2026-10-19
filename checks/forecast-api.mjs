@@ -80,3 +80,12 @@ test('selected wave models isolate ports, route, map, and Swedish update clocks'
  t.state.waveSource='ecmwf_wam';assert.equal(t.waveAt(0,'wave_height'),9);assert.equal(t.currentGrid()[0].series.hourly.wave_height[0],9);
  const html=fs.readFileSync('dist/index.html','utf8');for(const model of ['fmi_wam','dmi_wam','dwd_ewam','copernicus_baltic','dmi_harmonie'])assert(html.includes('value="'+model+'"'));assert(html.includes('id="windSource"'));assert(html.includes('id="waveUpdates"'));
 });
+
+
+test('DMI cloud fractions become percent and accumulated precipitation becomes exact hourly amounts',()=>{
+ const fields={'wind-speed-10m':[3,4,5],'fraction-of-cloud-cover':[.5,0,1],'high-cloud-cover':[100,0,50],'low-cloud-cover':[0,0,40],'medium-cloud-cover':[20,0,80],'total-precipitation':[2,2.5,4]};
+ const data={domain:{axes:{t:{values:[T,'2026-10-18T17:00:00Z','2026-10-18T18:00:00Z']},x:{values:[20]},y:{values:[58.3]}}},ranges:Object.fromEntries(Object.entries(fields).map(([key,values])=>[key,{axisNames:['t','y','x'],shape:[3,1,1],values}]))};
+ const h=normalizeDMI(data,[point],'dmi_harmonie',T).records[0].hourly;assert.deepEqual(h.cloud_cover,[50,0,100]);assert.deepEqual(h.cloud_cover_high,[100,0,50]);assert.deepEqual(h.precipitation,[null,.5,1.5]);
+ data.ranges['total-precipitation'].values=[2,1,2];assert.deepEqual(normalizeDMI(data,[point],'dmi_harmonie',T).records[0].hourly.precipitation,[null,null,1]);
+ data.domain.axes.t.values[2]='2026-10-18T20:00:00Z';assert.equal(normalizeDMI(data,[point],'dmi_harmonie',T).records[0].hourly.precipitation[2],null);
+});

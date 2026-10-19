@@ -42,14 +42,15 @@ export function normalizeFMI(xml,points) {
 }
 export function normalizeDMI(data,points,model,referenceTime) {
   const axes=data.domain?.axes,range=data.ranges;if(!axes?.t?.values||!range)throw Error('Nieprawidłowa prognoza DMI');
-  const fields=model==='dmi_wam'?{'significant-wave-height':'wave_height','mean-wave-dir':'wave_direction','mean-wave-period':'wave_period'}:{'wind-speed-10m':'wind_speed_10m','wind-dir-10m':'wind_direction_10m','gust-wind-speed-10m':'wind_gusts_10m'};
+  const fields=model==='dmi_wam'?{'significant-wave-height':'wave_height','mean-wave-dir':'wave_direction','mean-wave-period':'wave_period'}:{'wind-speed-10m':'wind_speed_10m','wind-dir-10m':'wind_direction_10m','gust-wind-speed-10m':'wind_gusts_10m','fraction-of-cloud-cover':'cloud_cover','high-cloud-cover':'cloud_cover_high','medium-cloud-cover':'cloud_cover_mid','low-cloud-cover':'cloud_cover_low'};
   const xs=axes.x?.values,ys=axes.y?.values;if(!xs?.length||!ys?.length)throw Error('Brak siatki DMI');
   const nearest=(arr,v)=>arr.reduce((best,x,i)=>Math.abs(x-v)<Math.abs(arr[best]-v)?i:best,0);
   const records=points.map(p=>{
     let x=nearest(xs,p.lon),y=nearest(ys,p.lat);
     const read=(key,t,xx=x,yy=y)=>{const r=range[key];if(!r)return null;let index=0;for(let j=0;j<r.axisNames.length;j++)index=index*r.shape[j]+({t,x:xx,y:yy}[r.axisNames[j]]??0);return numeric(r.values[index],key.includes('dir')?360:Infinity);};
     if(model==='dmi_wam'&&read('significant-wave-height',0)===null){let best=Infinity;for(let yy=Math.max(0,y-2);yy<=Math.min(ys.length-1,y+2);yy++)for(let xx=Math.max(0,x-2);xx<=Math.min(xs.length-1,x+2);xx++){const d=(xs[xx]-p.lon)**2*Math.cos(p.lat*Math.PI/180)**2+(ys[yy]-p.lat)**2;if(d<best&&read('significant-wave-height',0,xx,yy)!==null){best=d;x=xx;y=yy;}}}
-    const hourly={time:axes.t.values.map(t=>Date.parse(t)/1000)};for(const [field,key] of Object.entries(fields))hourly[key]=axes.t.values.map((_,t)=>read(field,t));
+    const hourly={time:axes.t.values.map(t=>Date.parse(t)/1000)};for(const [field,key] of Object.entries(fields))hourly[key]=axes.t.values.map((_,t)=>{const v=read(field,t);return key==='cloud_cover'?numeric(v===null?null:v*100,100):key.startsWith('cloud_cover_')?numeric(v,100):v;});
+    if(model==='dmi_harmonie')hourly.precipitation=axes.t.values.map((_,t)=>{if(!t||hourly.time[t]-hourly.time[t-1]!==3600)return null;const a=read('total-precipitation',t-1),b=read('total-precipitation',t);return a!==null&&b!==null&&b>=a?b-a:null;});
     return {id:p.id,latitude:ys[y],longitude:xs[x],provider:'DMI',model:model==='dmi_wam'?'WAM NSB':'HARMONIE DINI',referenceTime,hourly};
   });
   return {records,timing:dmiTiming(referenceTime,model),attribution:'Danish Meteorological Institute, CC BY 4.0'};
@@ -58,7 +59,7 @@ export function createForecastAPI({fetcher=(...args)=>fetch(...args),now=()=>Dat
   const memory=new Map(),pending=new Map();
   async function cached(key,ttl,load,ctx={}) {
     const old=memory.get(key);if(old&&now()-old.saved<ttl*1000)return old.value;
-    const storage=cache||(typeof caches!=='undefined'?caches.default:null),request=new Request('https://weather.seasync.co/__forecast_cache/v4/'+encodeURIComponent(key));
+    const storage=cache||(typeof caches!=='undefined'?caches.default:null),request=new Request('https://weather.seasync.co/__forecast_cache/v5/'+encodeURIComponent(key));
     if(storage&&ttl){const hit=await storage.match(request);if(hit){const value=await hit.json();memory.set(key,{saved:now(),value});return value;}}
     if(!pending.has(key))pending.set(key,(async()=>{const value=await load();if(ttl){if(memory.size>180)memory.delete(memory.keys().next().value);memory.set(key,{saved:now(),value});if(storage){const task=storage.put(request,new Response(JSON.stringify(value),{headers:{'Content-Type':'application/json','Cache-Control':'public, max-age='+ttl}}));if(ctx.waitUntil)ctx.waitUntil(task);else await task;}}return value;})().finally(()=>pending.delete(key)));
     return pending.get(key);
@@ -68,7 +69,7 @@ export function createForecastAPI({fetcher=(...args)=>fetch(...args),now=()=>Dat
   const getBuffer=async url=>await(await response(url)).arrayBuffer();
   async function fetchModel(model,points,group) {
     // Match the shared UI axis: previous full hour through 71 hours ahead.
-    const start=iso(Math.floor(now()/HOUR)*HOUR-HOUR),end=iso(Math.floor(now()/HOUR)*HOUR+71*HOUR);
+    const start=iso(Math.floor(now()/HOUR)*HOUR-(model==='dmi_harmonie'?2:1)*HOUR),end=iso(Math.floor(now()/HOUR)*HOUR+71*HOUR);
     if(model==='copernicus_baltic')return loadCopernicus(points,{getJSON,getBuffer,now:now()});
     if(model==='fmi_wam'){
       // The documented stored query accepts one location. Repeated latlon
@@ -89,7 +90,7 @@ export function createForecastAPI({fetcher=(...args)=>fetch(...args),now=()=>Dat
     const collection=SOURCES[model].collection,root='https://opendataapi.dmi.dk/v1/forecastedr/collections/'+collection;
     const runs=await getJSON(root+'/instances',300),instance=[...runs.instances].sort((a,b)=>b.id.localeCompare(a.id))[0];if(!instance)throw Error('Brak cyklu DMI');
     const referenceTime=instance.id.replace(/T(\d{2})(\d{2})(\d{2})Z$/,'T$1:$2:$3Z');
-    const fields=model==='dmi_wam'?'significant-wave-height,mean-wave-dir,mean-wave-period':'wind-speed-10m,wind-dir-10m,gust-wind-speed-10m';
+    const fields=model==='dmi_wam'?'significant-wave-height,mean-wave-dir,mean-wave-period':'wind-speed-10m,wind-dir-10m,gust-wind-speed-10m'+(group==='ports'?',fraction-of-cloud-cover,high-cloud-cover,medium-cloud-cover,low-cloud-cover,total-precipitation':'');
     const max=Date.parse(instance.extent.temporal.interval[0][1]),limit=iso(Math.min(Date.parse(end),max));
     const records=[];
     // Distant app samples must not request a giant rectangular 2-km wind grid.
