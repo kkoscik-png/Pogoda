@@ -1,3 +1,4 @@
+import { createLastGoodCache, normalizeDMIOpenMeteo } from './dmi-resilience.mjs';
 import { STORMGLASS_POINTS } from './stormglass-points.mjs';
 import { FORECAST_GRIDS } from './forecast-points.mjs';
 import { loadCopernicus, copernicusDataset } from './copernicus.mjs';
@@ -42,38 +43,40 @@ export function normalizeFMI(xml,points) {
 }
 export function normalizeDMI(data,points,model,referenceTime,fetchedAt=Date.now()) {
   const axes=data.domain?.axes,range=data.ranges;if(!axes?.t?.values||!range)throw Error('Nieprawidłowa prognoza DMI');
-  const fields=model==='dmi_wam'?{'significant-wave-height':'wave_height','mean-wave-dir':'wave_direction','mean-wave-period':'wave_period'}:{'wind-speed-10m':'wind_speed_10m','wind-dir-10m':'wind_direction_10m','gust-wind-speed-10m':'wind_gusts_10m','fraction-of-cloud-cover':'cloud_cover','high-cloud-cover':'cloud_cover_high','medium-cloud-cover':'cloud_cover_mid','low-cloud-cover':'cloud_cover_low'};
+  const fields=model==='dmi_wam'?{'significant-wave-height':'wave_height','mean-wave-dir':'wave_direction','mean-wave-period':'wave_period'}:{'wind-speed-10m':'wind_speed_10m','wind-dir-10m':'wind_direction_10m','gust-wind-speed-10m':'wind_gusts_10m','fraction-of-cloud-cover':'cloud_cover','high-cloud-cover':'cloud_cover_high','medium-cloud-cover':'cloud_cover_mid','low-cloud-cover':'cloud_cover_low','temperature-2m':'temperature_2m'};
   const xs=axes.x?.values,ys=axes.y?.values;if(!xs?.length||!ys?.length)throw Error('Brak siatki DMI');
   const nearest=(arr,v)=>arr.reduce((best,x,i)=>Math.abs(x-v)<Math.abs(arr[best]-v)?i:best,0);
   const records=points.map(p=>{
     let x=nearest(xs,p.lon),y=nearest(ys,p.lat);
     const read=(key,t,xx=x,yy=y)=>{const r=range[key];if(!r)return null;let index=0;for(let j=0;j<r.axisNames.length;j++)index=index*r.shape[j]+({t,x:xx,y:yy}[r.axisNames[j]]??0);return numeric(r.values[index],key.includes('dir')?360:Infinity);};
     if(model==='dmi_wam'&&read('significant-wave-height',0)===null){let best=Infinity;for(let yy=Math.max(0,y-2);yy<=Math.min(ys.length-1,y+2);yy++)for(let xx=Math.max(0,x-2);xx<=Math.min(xs.length-1,x+2);xx++){const d=(xs[xx]-p.lon)**2*Math.cos(p.lat*Math.PI/180)**2+(ys[yy]-p.lat)**2;if(d<best&&read('significant-wave-height',0,xx,yy)!==null){best=d;x=xx;y=yy;}}}
-    const hourly={time:axes.t.values.map(t=>Date.parse(t)/1000)};for(const [field,key] of Object.entries(fields))hourly[key]=axes.t.values.map((_,t)=>{const v=read(field,t);return key==='cloud_cover'?numeric(v===null?null:v*100,100):key.startsWith('cloud_cover_')?numeric(v,100):v;});
+    const hourly={time:axes.t.values.map(t=>Date.parse(t)/1000)};for(const [field,key] of Object.entries(fields))hourly[key]=axes.t.values.map((_,t)=>{const v=read(field,t);return key==='temperature_2m'?(v===null?null:v-273.15):key==='cloud_cover'?numeric(v===null?null:v*100,100):key.startsWith('cloud_cover_')?numeric(v,100):v;});
     if(model==='dmi_harmonie')hourly.precipitation=axes.t.values.map((_,t)=>{if(!t||hourly.time[t]-hourly.time[t-1]!==3600)return null;const a=read('total-precipitation',t-1),b=read('total-precipitation',t);return a!==null&&b!==null&&b>=a?b-a:null;});
     return {id:p.id,latitude:ys[y],longitude:xs[x],provider:'DMI',model:model==='dmi_wam'?'WAM NSB':'HARMONIE DINI',referenceTime,hourly};
   });
-  return {records,timing:Number.isFinite(Date.parse(referenceTime))?dmiTiming(referenceTime,model):modelTiming(iso(fetchedAt),15*60000,null,'fetch'),attribution:'Danish Meteorological Institute, CC BY 4.0'};
+  return {records,timing:Number.isFinite(Date.parse(referenceTime))?dmiTiming(referenceTime,model):modelTiming(iso(fetchedAt),HOUR,null,'fetch'),attribution:'Danish Meteorological Institute, CC BY 4.0'};
 }
 export function createDMIRequester({fetcher,now=()=>Date.now(),cache=null,pause=ms=>new Promise(resolve=>setTimeout(resolve,ms))}){
- let queue=Promise.resolve(),nextRequest=0,cooldownUntil=0,failures=0;
- const cooldownKey=new Request('https://weather.seasync.co/__dmi_cooldown/v1');
+ let queue=Promise.resolve(),nextRequest=0,cooldownUntil=0,failures=0,lastBackoff=0;
+ const cooldownKey=new Request('https://weather.seasync.co/__dmi_cooldown/v2');
  const storage=()=>cache||(typeof caches!=='undefined'?caches.default:null);
  const busy=until=>Object.assign(Error('DMI jest przeciążone. Kolejna próba po przerwie.'),{status:429,retryAt:until,retryAfter:Math.max(1,Math.ceil((until-now())/1000))});
  return url=>{
   const job=queue.then(async()=>{
-   const store=storage();if(store){const hit=await store.match(cooldownKey);if(hit){const state=await hit.json();cooldownUntil=Math.max(cooldownUntil,Number(state.until)||0);}}
+   const store=storage();if(store){const hit=await store.match(cooldownKey);if(hit){const state=await hit.json();cooldownUntil=Math.max(cooldownUntil,Number(state.until)||0);failures=Math.max(failures,state.failures||0);lastBackoff=Math.max(lastBackoff,state.backoff||0);}}
    if(now()<cooldownUntil)throw busy(cooldownUntil);
    const delay=Math.max(0,nextRequest-now());if(delay)await pause(delay);nextRequest=now()+1000;
-   const response=await fetcher(url,{signal:AbortSignal.timeout(35000),headers:{Accept:'application/geo+json, application/prs.coverage+json, application/json'}});
+   const response=await fetcher(url,{signal:AbortSignal.timeout(60000),headers:{Accept:'application/geo+json, application/prs.coverage+json, application/json'}});
    if(response.status===429){
     failures++;const raw=response.headers.get('Retry-After'),seconds=raw&&/^\d+(\.\d+)?$/.test(raw)?Number(raw):null,headerDelay=seconds!==null?seconds*1000:raw?Date.parse(raw)-now():NaN;
-    const backoff=Number.isFinite(headerDelay)&&headerDelay>0?headerDelay:Math.min(900000,10000*3**(failures-1));cooldownUntil=now()+backoff;
-    if(store)await store.put(cooldownKey,new Response(JSON.stringify({until:cooldownUntil}),{headers:{'Content-Type':'application/json','Cache-Control':'public, max-age='+Math.max(1,Math.ceil(backoff/1000))}}));
+    const backoff=Math.max(Number.isFinite(headerDelay)?headerDelay:0,Math.min(900000,lastBackoff?lastBackoff*2:60000));cooldownUntil=now()+backoff;lastBackoff=backoff;
+    if(store)await store.put(cooldownKey,new Response(JSON.stringify({until:cooldownUntil,failures,backoff}),{headers:{'Content-Type':'application/json','Cache-Control':'public, max-age=86400'}}));
     await response.body?.cancel();throw busy(cooldownUntil);
    }
    if(!response.ok){const error=Object.assign(Error('DMI: HTTP '+response.status),{status:response.status});await response.body?.cancel();throw error;}
-   failures=0;return response;
+   // Metadata success does not mean the forecast data service has recovered.
+   if(/\/(position|cube)\?/.test(url)){failures=0;lastBackoff=0;cooldownUntil=0;if(store)await store.put(cooldownKey,new Response(JSON.stringify({until:0,failures:0,backoff:0}),{headers:{'Cache-Control':'public, max-age=1'}}));}
+   return response;
   });queue=job.catch(()=>{});return job;
  };
 }
@@ -88,13 +91,13 @@ export function normalizeDMIGeoJSON(data,points,model,referenceTime=null,fetched
   const coverage={domain:{axes:{t:{values:times},x:{values:[lon]},y:{values:[lat]}}},ranges:Object.fromEntries([...keys].map(key=>[key,{axisNames:['t','y','x'],shape:[times.length,1,1],values:times.map(t=>rows.get(t)[key]??null)}]))};
   return normalizeDMI(coverage,[point],model,referenceTime,fetchedAt).records[0];
  });
- return {records,timing:Number.isFinite(Date.parse(referenceTime))?dmiTiming(referenceTime,model):modelTiming(iso(fetchedAt),15*60000,null,'fetch'),attribution:'Danish Meteorological Institute, CC BY 4.0'};
+ return {records,timing:Number.isFinite(Date.parse(referenceTime))?dmiTiming(referenceTime,model):modelTiming(iso(fetchedAt),HOUR,null,'fetch'),attribution:'Danish Meteorological Institute, CC BY 4.0'};
 }
 export function createForecastAPI({fetcher=(...args)=>fetch(...args),now=()=>Date.now(),cache=null,pause}={}) {
-  const memory=new Map(),pending=new Map(),dmiTimings=new Map(),dmiResponse=createDMIRequester({fetcher,now,cache,pause});
+  const memory=new Map(),pending=new Map(),dmiTimings=new Map(),dmiResponse=createDMIRequester({fetcher,now,cache,pause}),lastGood=createLastGoodCache({now,cache});
   async function cached(key,ttl,load,ctx={}) {
     const old=memory.get(key);if(old&&now()-old.saved<ttl*1000)return old.value;
-    const storage=cache||(typeof caches!=='undefined'?caches.default:null),request=new Request('https://weather.seasync.co/__forecast_cache/v6/'+encodeURIComponent(key));
+    const storage=cache||(typeof caches!=='undefined'?caches.default:null),request=new Request('https://weather.seasync.co/__forecast_cache/v8/'+encodeURIComponent(key));
     if(storage&&ttl){const hit=await storage.match(request);if(hit){const value=await hit.json();memory.set(key,{saved:now(),value});return value;}}
     if(!pending.has(key))pending.set(key,(async()=>{const value=await load();if(ttl){if(memory.size>180)memory.delete(memory.keys().next().value);memory.set(key,{saved:now(),value});if(storage){const task=storage.put(request,new Response(JSON.stringify(value),{headers:{'Content-Type':'application/json','Cache-Control':'public, max-age='+ttl}}));if(ctx.waitUntil)ctx.waitUntil(task);else await task;}}return value;})().finally(()=>pending.delete(key)));
     return pending.get(key);
@@ -124,12 +127,12 @@ export function createForecastAPI({fetcher=(...args)=>fetch(...args),now=()=>Dat
     }
     const collection=SOURCES[model].collection,root='https://opendataapi.dmi.dk/v1/forecastedr/collections/'+collection;
     // The collection endpoint selects the latest COMPLETE run, as documented by DMI.
-    const collectionMeta=await getJSON(root,900),interval=collectionMeta.extent?.temporal?.interval?.[0]||[];
+    const collectionMeta=await getJSON(root,3600),interval=collectionMeta.extent?.temporal?.interval?.[0]||[];
     const availableStart=Date.parse(interval[0]),availableEnd=Date.parse(interval[1]);
     const queryStart=iso(Math.max(Date.parse(start),Number.isFinite(availableStart)?availableStart:Date.parse(start))),queryEnd=iso(Math.min(Date.parse(end),Number.isFinite(availableEnd)?availableEnd:Date.parse(end)));
     if(Date.parse(queryEnd)<Date.parse(queryStart))throw Error('Brak prognozy DMI w wybranym zakresie.');
-    const fields=model==='dmi_wam'?'significant-wave-height,mean-wave-dir,mean-wave-period':'wind-speed-10m,wind-dir-10m,gust-wind-speed-10m'+(group==='ports'?',fraction-of-cloud-cover,high-cloud-cover,medium-cloud-cover,low-cloud-cover,total-precipitation':'');
-    const records=[];
+    const fields=model==='dmi_wam'?'significant-wave-height,mean-wave-dir,mean-wave-period':'wind-speed-10m,wind-dir-10m,gust-wind-speed-10m'+(group==='ports'?',fraction-of-cloud-cover,high-cloud-cover,medium-cloud-cover,low-cloud-cover,total-precipitation,temperature-2m':'');
+    const records=[],savedTimes=[];
     // Distant app samples must not request a giant rectangular 2-km wind grid.
     // Small fixed-point requests stay below EDR's payload and Worker limits.
     for(const p of points){
@@ -137,10 +140,18 @@ export function createForecastAPI({fetcher=(...args)=>fetch(...args),now=()=>Dat
       const query={crs:'crs84','parameter-name':fields,datetime:queryStart+'/'+queryEnd,f:sea?'CoverageJSON':'GeoJSON'};
       if(sea)query.bbox=[p.lon-.12,p.lat-.08,p.lon+.12,p.lat+.08].join(',');else query.coords='POINT('+p.lon+' '+p.lat+')';
       const url=root+'/'+(sea?'cube':'position')+'?'+new URLSearchParams(query).toString().replace(/\+/g,'%20');
-      const data=await getJSON(url,model==='dmi_harmonie'?900:1800),result=sea?normalizeDMI(data,[p],model,null,now()):normalizeDMIGeoJSON(data,[p],model,null,now());
-      records.push(...result.records);
+      const pointKey=['dmi-point',model,p.lon,p.lat,group==='ports'?'weather':'grid'].join('/');
+      const result=await cached(pointKey,3600,async()=>{const data=await(await response(url)).json(),saved=now(),result=sea?normalizeDMI(data,[p],model,null,saved):normalizeDMIGeoJSON(data,[p],model,null,saved);return {...result,saved};});
+      records.push(...result.records);savedTimes.push(result.saved);
     }
-    const timing=modelTiming(iso(now()),15*60000,null,'fetch');dmiTimings.set(model,timing);return {records,timing,attribution:'Danish Meteorological Institute, CC BY 4.0'};
+    const saved=Math.min(...savedTimes),timing=modelTiming(iso(saved),HOUR,null,'fetch');dmiTimings.set(model,timing);return {records,timing,saved,delivery:'dmi',attribution:'Danish Meteorological Institute, CC BY 4.0'};
+  }
+  async function fetchDMIFallback(points,group){
+    const hour=Math.floor(now()/HOUR)*HOUR,fields=['wind_speed_10m','wind_gusts_10m','wind_direction_10m',...(group==='ports'?['temperature_2m','cloud_cover','cloud_cover_low','cloud_cover_mid','cloud_cover_high','precipitation']:[])];
+    const query={latitude:points.map(p=>p.lat).join(','),longitude:points.map(p=>p.lon).join(','),hourly:fields.join(','),models:'dmi_seamless',wind_speed_unit:'ms',temperature_unit:'celsius',timeformat:'unixtime',timezone:'UTC',start_hour:iso(hour-HOUR).slice(0,16),end_hour:iso(hour+72*HOUR).slice(0,16),cell_selection:'nearest'};
+    const result=await fetcher('https://api.open-meteo.com/v1/forecast?'+new URLSearchParams(query),{signal:AbortSignal.timeout(60000)});
+    if(!result.ok)throw Object.assign(Error('Open-Meteo: HTTP '+result.status),{status:result.status});
+    const payload=normalizeDMIOpenMeteo(await result.json(),points,now());dmiTimings.set('dmi_harmonie',payload.timing);return payload;
   }
   return async function handleForecast(request,env,ctx={}) {
     const u=new URL(request.url);if(!['/api/forecast','/api/model-updates'].includes(u.pathname))return null;
@@ -162,7 +173,9 @@ export function createForecastAPI({fetcher=(...args)=>fetch(...args),now=()=>Dat
     const offset=Number(text);if(offset%BATCH||offset>=points.length||(group==='ports'&&offset))return json({error:'Nieprawidłowy zakres.'},400);
     const selected=points.slice(offset,offset+BATCH),key=[model,group,offset,Math.floor(now()/HOUR)].join('/');
     try {
-      const payload=await cached(key,model==='dmi_harmonie'?900:1800,async()=>({...await fetchModel(model,selected,group),saved:now()}),ctx);
+      const payload=model.startsWith('dmi_')
+        ?await lastGood([model,group,offset].join('/'),()=>fetchModel(model,selected,group),model==='dmi_harmonie'?()=>fetchDMIFallback(selected,group):null)
+        :await cached(key,1800,async()=>({...await fetchModel(model,selected,group),saved:now()}),ctx);
       return json({...payload,model,group,total:points.length,nextOffset:offset+selected.length<points.length?offset+selected.length:null});
     }catch(e){return json({error:e.status===429?(model.startsWith('dmi_')?'DMI jest przeciążone. Odczekaj '+e.retryAfter+' s przed kolejną próbą.':'Dostawca jest zajęty. Ponów pobieranie za chwilę.'):'Nie udało się pobrać modelu '+model+'.',model,...(e.retryAt?{retryAt:iso(e.retryAt),retryAfter:e.retryAfter}:{})},e.status===429?429:502,e.retryAfter?{'Retry-After':String(e.retryAfter)}:{});}
   };

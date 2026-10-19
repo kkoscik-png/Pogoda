@@ -1,3 +1,4 @@
+import {createLastGoodCache,normalizeDMIOpenMeteo} from '../worker/dmi-resilience.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -115,15 +116,15 @@ test('DMI serializes different requests and spaces starts by at least one second
 test('DMI respects Retry-After and shares its cooldown across worker instances and groups',async()=>{
  let clock=Date.parse(T),calls=0;const stored=new Map(),cache={async match(req){return stored.get(req.url)?.clone();},async put(req,res){stored.set(req.url,res.clone());}};
  const options={cache,now:()=>clock,pause:async ms=>{clock+=ms;},fetcher:async()=>{calls++;return new Response('busy',{status:429,headers:{'Retry-After':'120'}});}};
- const a=createForecastAPI(options),b=createForecastAPI(options),request=group=>new Request('https://weather.seasync.co/api/forecast?model=dmi_harmonie&group='+group);
+ const a=createForecastAPI(options),b=createForecastAPI(options),request=group=>new Request('https://weather.seasync.co/api/forecast?model=dmi_wam&group='+group);
  const first=await a(request('ports'),{});assert.equal(first.status,429);assert.equal(first.headers.get('Retry-After'),'120');assert.equal((await first.json()).retryAt,'2026-10-18T16:02:00.000Z');assert.equal(calls,1);
- const second=await b(request('wind-grid'),{});assert.equal(second.status,429);assert.equal(calls,1);clock+=121000;assert.equal((await b(request('ports'),{})).status,429);assert.equal(calls,2);
+ const second=await b(request('wave-grid'),{});assert.equal(second.status,429);assert.equal(calls,1);clock+=121000;assert.equal((await b(request('ports'),{})).status,429);assert.equal(calls,2);
 });
 
-test('DMI server busy without Retry-After starts at ten seconds and backs off',async()=>{
+test('DMI server busy without Retry-After waits sixty seconds and doubles each pause',async()=>{
  let clock=Date.parse(T),calls=0;const api=createForecastAPI({now:()=>clock,fetcher:async()=>{calls++;return new Response('Server is busy',{status:429});}});const req=()=>new Request('https://weather.seasync.co/api/forecast?model=dmi_wam&group=ports');
- const first=await api(req(),{});assert.equal(first.status,429);assert.equal(first.headers.get('Retry-After'),'10');assert.equal(calls,1);assert.equal((await api(req(),{})).status,429);assert.equal(calls,1);
- const metadata=await api(new Request('https://weather.seasync.co/api/model-updates?model=dmi_wam'),{});assert.equal(metadata.status,429);assert.equal(calls,1);clock+=10000;assert.equal((await api(req(),{})).headers.get('Retry-After'),'30');assert.equal(calls,2);clock+=30000;assert.equal((await api(req(),{})).headers.get('Retry-After'),'90');assert.equal(calls,3);
+ const first=await api(req(),{});assert.equal(first.status,429);assert.equal(first.headers.get('Retry-After'),'60');assert.equal(calls,1);assert.equal((await api(req(),{})).status,429);assert.equal(calls,1);
+ const metadata=await api(new Request('https://weather.seasync.co/api/model-updates?model=dmi_wam'),{});assert.equal(metadata.status,429);assert.equal(calls,1);clock+=60000;assert.equal((await api(req(),{})).headers.get('Retry-After'),'120');assert.equal(calls,2);clock+=120000;assert.equal((await api(req(),{})).headers.get('Retry-After'),'240');assert.equal(calls,3);
 });
 
 test('DMI handles an HTTP date in Retry-After',async()=>{
@@ -145,7 +146,7 @@ function dmiClientFixture(statuses){
   localStorage:{getItem(){return null;},setItem(){}},document:{hidden:false,getElementById:()=>({})},
   fetch:async()=>{const status=statuses[Math.min(calls++,statuses.length-1)];return new Response(JSON.stringify(status===429?{error:'Server is busy',retryAt:new Date(clock+(calls===1?10000:30000)).toISOString(),retryAfter:calls===1?10:30}:{records:Array.from({length:3},(_,i)=>({id:String(i),hourly:{time:[],wind_speed_10m:[]}})),nextOffset:null}),{status});}};
  vm.createContext(c);vm.runInContext(fs.readFileSync('dist/app.js','utf8').replace(/start\(\);\s*$/,'')+`;renderAll=()=>{};renderUpdateClocks=()=>{};loadField=async()=>{recordMapLoad();};globalThis.t={state,loadExtraWindPorts,providerRetries,providerRetryTimers,resumeDMIRetries,clearDMIRetryTimers};`,Object.assign(c,{recordMapLoad(){mapLoads++;}}));
- c.t.state.model='dmi_harmonie';return {c,timers,get calls(){return calls;},get mapLoads(){return mapLoads;},async fire(){const [id,timer]=[...timers][0];timers.delete(id);clock=Math.max(clock,timer.at);await timer.fn();}};
+ c.t.state.model='dmi_harmonie';return {c,timers,get calls(){return calls;},get mapLoads(){return mapLoads;},advance(ms){clock+=ms;},async fire(){const [id,timer]=[...timers][0];timers.delete(id);clock=Math.max(clock,timer.at);await timer.fn();}};
 }
 test('selected DMI retries automatically twice, deduplicates timers and recovers chart plus map',async()=>{
  const f=dmiClientFixture([429,429,200]),t=f.c.t;await t.loadExtraWindPorts('dmi_harmonie');assert.equal(f.calls,1);assert.equal(f.timers.size,1);assert.match(t.state.errors.dmi_harmonie,/próba 1\/2/);
@@ -163,4 +164,36 @@ test('automatic DMI retries pause in a hidden page and skip an unselected source
  const f=dmiClientFixture([429]),t=f.c.t;f.c.document.hidden=true;await t.loadExtraWindPorts('dmi_harmonie');assert.equal(f.timers.size,0);assert.equal(f.calls,1);
  f.c.document.hidden=false;t.resumeDMIRetries();assert.equal(f.timers.size,1);f.c.document.hidden=true;t.clearDMIRetryTimers();assert.equal(f.timers.size,0);
  f.c.document.hidden=false;t.resumeDMIRetries();t.state.model='ecmwf_ifs';await f.fire();assert.equal(f.calls,1);assert.equal(f.timers.size,0);
+});
+
+function openMeteoFixture(points,time=Date.parse(T)/1000){return points.map(p=>({latitude:p.lat,longitude:p.lon,hourly_units:{wind_speed_10m:'m/s',temperature_2m:'°C'},hourly:{time:[time,time+3600,time+12*3600],wind_speed_10m:[0,3,4],wind_direction_10m:[0,90,180],wind_gusts_10m:[0,5,7],cloud_cover:[0,50,100],precipitation:[0,1.2,null],temperature_2m:[-4,0,6]}}));}
+function forecastStore(){const entries=new Map();return {async match(req){return entries.get(req.url)?.clone();},async put(req,res){entries.set(req.url,res.clone());}};}
+test('DMI Open-Meteo fallback preserves units, calm, gaps, negative Celsius and declares the ECMWF blend',()=>{
+ const r=normalizeDMIOpenMeteo(openMeteoFixture([point]),[point],Date.parse(T));assert.equal(r.delivery,'open-meteo');assert.equal(r.blend,true);assert.match(r.notice,/DMI.*ECMWF/);assert.equal(r.records[0].hourly.wind_speed_10m[0],0);assert.equal(r.records[0].hourly.wind_direction_10m[0],0);assert.equal(r.records[0].hourly.precipitation[2],null);assert.equal(r.records[0].hourly.temperature_2m[0],-4);assert.equal(r.timing.nextUpdate,'2026-10-18T17:00:00.000Z');
+ const wrong=openMeteoFixture([point]);wrong[0].hourly_units.wind_speed_10m='km/h';assert.throws(()=>normalizeDMIOpenMeteo(wrong,[point]));
+});
+test('DMI stores one forecast per rolling hour, survives Worker replacement, and returns the original stale snapshot on failure',async()=>{
+ let clock=Date.parse(T),loads=0,fallbacks=0;const cache=forecastStore(),options={cache,now:()=>clock},a=createLastGoodCache(options);const load=async()=>{loads++;return {...normalizeDMIOpenMeteo(openMeteoFixture([point]),[point],clock),delivery:'dmi',blend:false};};
+ const first=await a('point',load);assert.equal(loads,1);clock+=3599000;const b=createLastGoodCache(options);assert.equal((await b('point',load)).saved,first.saved);assert.equal(loads,1);
+ clock+=2000;const old=await b('point',async()=>{loads++;throw Error('timeout');},async()=>{fallbacks++;throw Error('must use old snapshot');});assert.equal(loads,2);assert.equal(fallbacks,0);assert.equal(old.saved,first.saved);assert.equal(old.delivery,'dmi');assert.equal(old.stale,true);assert.match(old.notice,/może być nieaktualna/);assert.equal(old.records[0].hourly.wind_speed_10m[1],3);
+});
+test('DMI uses one Open-Meteo query for all ports and parameters after a native failure, then caches it for an hour',async()=>{
+ let clock=Date.parse(T),dmi=0,meteo=0;const api=createForecastAPI({now:()=>clock,pause:async ms=>{clock+=ms;},fetcher:async (url,options)=>{
+  assert(options.signal);const u=new URL(url);if(u.hostname==='opendataapi.dmi.dk'){dmi++;return new Response('busy',{status:429});}
+  assert.equal(u.hostname,'api.open-meteo.com');meteo++;assert.equal(u.searchParams.get('models'),'dmi_seamless');assert.equal(u.searchParams.get('wind_speed_unit'),'ms');assert.equal(u.searchParams.get('temperature_unit'),'celsius');const fields=u.searchParams.get('hourly').split(',');for(const field of ['wind_speed_10m','wind_gusts_10m','wind_direction_10m','cloud_cover','cloud_cover_low','cloud_cover_mid','cloud_cover_high','precipitation','temperature_2m'])assert(fields.includes(field));
+  const lats=u.searchParams.get('latitude').split(',').map(Number),lons=u.searchParams.get('longitude').split(',').map(Number);assert.equal(lats.length,3);return new Response(JSON.stringify(openMeteoFixture(lats.map((lat,i)=>({lat,lon:lons[i]})))));
+ }});
+ const req=()=>new Request('https://weather.seasync.co/api/forecast?model=dmi_harmonie&group=ports');const r=await api(req(),{});assert.equal(r.status,200);const data=await r.json();assert.equal(data.records.length,3);assert.equal(data.delivery,'open-meteo');assert(data.blend);assert.equal(data.stale,false);assert.equal(dmi,1);assert.equal(meteo,1);clock+=3599000;assert.equal((await api(req(),{})).status,200);assert.equal(dmi,1);assert.equal(meteo,1);
+});
+test('DMI honours a shorter Retry-After with the minimum sixty-second pause',async()=>{
+ let clock=0,calls=0;const request=createDMIRequester({now:()=>clock,fetcher:async()=>{calls++;return new Response('busy',{status:429,headers:{'Retry-After':'5'}});}});await assert.rejects(request('https://opendataapi.dmi.dk/a'),e=>e.retryAfter===60);clock=30000;await assert.rejects(request('https://opendataapi.dmi.dk/b'),e=>e.retryAfter===30);assert.equal(calls,1);clock=60000;await assert.rejects(request('https://opendataapi.dmi.dk/b'),e=>e.retryAfter===120);assert.equal(calls,2);
+});
+test('client labels cached DMI/ECMWF fallback honestly and keeps its own fetch timing',()=>{
+ const f=dmiClientFixture([200]);vm.runInContext(';globalThis.extra={windModelInfo,renderUpdateClocks,cacheLabel};',f.c);const t=f.c.t;t.state.metas.dmi_harmonie={delivery:'open-meteo',blend:true,saved:Date.parse(T),stale:true,timing:{updatedAt:T,nextUpdate:'2026-10-18T17:00:00Z',basis:'fetch'}};assert.match(f.c.extra.windModelInfo('dmi_harmonie').label,/DMI.*ECMWF.*Open-Meteo/);assert.equal(f.c.extra.windModelInfo('dmi_harmonie').short,'DMI/IFS');assert.match(f.c.extra.cacheLabel(t.state.metas.dmi_harmonie),/może być nieaktualna/);
+});
+
+test('selected DMI data refreshes after one hour and waits while the page is hidden',async()=>{
+ const f=dmiClientFixture([200]),t=f.c.t;vm.runInContext(';globalThis.refreshDMI=refreshDMIIfDue;',f.c);
+ await t.loadExtraWindPorts('dmi_harmonie');assert.equal(f.calls,1);f.advance(3599999);await t.loadExtraWindPorts('dmi_harmonie');assert.equal(f.calls,1);f.advance(1);await t.loadExtraWindPorts('dmi_harmonie');assert.equal(f.calls,2);
+ f.advance(3600000);f.c.document.hidden=true;await f.c.refreshDMI();assert.equal(f.calls,2);f.c.document.hidden=false;await f.c.refreshDMI();assert.equal(f.calls,3);assert.equal(f.mapLoads,1);
 });
