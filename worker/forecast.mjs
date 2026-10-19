@@ -124,13 +124,17 @@ export function createForecastAPI({fetcher=(...args)=>fetch(...args),now=()=>Dat
     }
     const collection=SOURCES[model].collection,root='https://opendataapi.dmi.dk/v1/forecastedr/collections/'+collection;
     // The collection endpoint selects the latest COMPLETE run, as documented by DMI.
+    const collectionMeta=await getJSON(root,900),interval=collectionMeta.extent?.temporal?.interval?.[0]||[];
+    const availableStart=Date.parse(interval[0]),availableEnd=Date.parse(interval[1]);
+    const queryStart=iso(Math.max(Date.parse(start),Number.isFinite(availableStart)?availableStart:Date.parse(start))),queryEnd=iso(Math.min(Date.parse(end),Number.isFinite(availableEnd)?availableEnd:Date.parse(end)));
+    if(Date.parse(queryEnd)<Date.parse(queryStart))throw Error('Brak prognozy DMI w wybranym zakresie.');
     const fields=model==='dmi_wam'?'significant-wave-height,mean-wave-dir,mean-wave-period':'wind-speed-10m,wind-dir-10m,gust-wind-speed-10m'+(group==='ports'?',fraction-of-cloud-cover,high-cloud-cover,medium-cloud-cover,low-cloud-cover,total-precipitation':'');
     const records=[];
     // Distant app samples must not request a giant rectangular 2-km wind grid.
     // Small fixed-point requests stay below EDR's payload and Worker limits.
     for(const p of points){
       const sea=model==='dmi_wam'&&group==='ports';
-      const query={crs:'crs84','parameter-name':fields,datetime:start+'/'+end,f:sea?'CoverageJSON':'GeoJSON'};
+      const query={crs:'crs84','parameter-name':fields,datetime:queryStart+'/'+queryEnd,f:sea?'CoverageJSON':'GeoJSON'};
       if(sea)query.bbox=[p.lon-.12,p.lat-.08,p.lon+.12,p.lat+.08].join(',');else query.coords='POINT('+p.lon+' '+p.lat+')';
       const url=root+'/'+(sea?'cube':'position')+'?'+new URLSearchParams(query);
       const data=await getJSON(url,model==='dmi_harmonie'?900:1800),result=sea?normalizeDMI(data,[p],model,null,now()):normalizeDMIGeoJSON(data,[p],model,null,now());
