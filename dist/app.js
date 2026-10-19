@@ -170,7 +170,7 @@ function scheduleMeteogram(){if(meteogramFrame||typeof requestAnimationFrame!=='
 function renderChart(){
  const ts=state.times.slice(0,Math.min(state.range,state.times.length));if(!ts.length)return;const width=ts.length*48,scroller=$('chartScroll');
  if(!state.chartPositioned&&scroller.clientWidth){scroller.scrollLeft=0;state.chartPositioned=true;}
- $('chartContent').style.width=width+'px';$('chartContent').innerHTML='<div id="meteogramPlot" class="meteogram-plot">'+meteogramSVG(ts)+'</div>'+buildWindyTable(ts);renderTableLabels();syncForecastScroll();
+ $('chartContent').style.width=width+'px';$('chartContent').innerHTML=buildWindyTable(ts)+'<div id="meteogramPlot" class="meteogram-plot">'+meteogramSVG(ts)+'</div>';renderTableLabels();syncForecastScroll();
  document.querySelectorAll('.extra-legend').forEach(x=>x.remove());if(state.compare)Object.keys(MODELS).filter(m=>m!==state.model).forEach(model=>{const span=document.createElement('span');span.className='extra-legend';span.innerHTML=`<i class="line" style="background:${MODELS[model].color}"></i>${MODELS[model].short} · wiatr`;document.querySelector('.forecast-legend').append(span);});
 }
 function renderTableLabels(){

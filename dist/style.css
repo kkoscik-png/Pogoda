@@ -40,3 +40,6 @@
 
 /* Clip long date labels without creating an inner scroll container. */
 .timeline-day strong,.meteo-day{overflow:clip}
+
+/* Keep the table labels aligned when the meteogram follows the comparison rows. */
+.model-label.wave-model-label{height:50px;border-top:2px solid #fff}
