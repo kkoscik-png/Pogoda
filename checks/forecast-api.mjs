@@ -100,7 +100,7 @@ test('documented DMI GeoJSON preserves coordinates, hourly gaps, cloud units, ze
 
 test('DMI uses complete-run collection position, GeoJSON, lon lat, filters and shared positive cache',async()=>{
  let clock=Date.parse(T),calls=0;const urls=[],api=createForecastAPI({now:()=>clock,pause:async ms=>{clock+=ms;},fetcher:async url=>{
-  calls++;urls.push(url);const u=new URL(url);assert.equal(u.hostname,'opendataapi.dmi.dk');if(u.pathname==='/v1/forecastedr/collections/harmonie_dini_sf')return new Response(JSON.stringify({extent:{temporal:{interval:[['2026-10-18T12:00:00Z','2026-10-20T12:00:00Z']]}}}));assert.equal(u.pathname,'/v1/forecastedr/collections/harmonie_dini_sf/position');assert.equal(u.searchParams.get('f'),'GeoJSON');assert.equal(u.searchParams.get('crs'),'crs84');assert(u.searchParams.get('parameter-name').includes('low-cloud-cover'));assert(u.searchParams.get('parameter-name').includes('total-precipitation'));assert.equal(u.searchParams.get('datetime'),'2026-10-18T14:00:00.000Z/2026-10-20T12:00:00.000Z');
+  calls++;urls.push(url);const u=new URL(url);assert.equal(u.hostname,'opendataapi.dmi.dk');if(u.pathname==='/v1/forecastedr/collections/harmonie_dini_sf')return new Response(JSON.stringify({extent:{temporal:{interval:[['2026-10-18T12:00:00Z','2026-10-20T12:00:00Z']]}}}));assert.equal(u.pathname,'/v1/forecastedr/collections/harmonie_dini_sf/position');assert.match(url,/coords=POINT%28[\d.]+%20[\d.]+%29/);assert(!url.includes('+'));assert.equal(u.searchParams.get('f'),'GeoJSON');assert.equal(u.searchParams.get('crs'),'crs84');assert(u.searchParams.get('parameter-name').includes('low-cloud-cover'));assert(u.searchParams.get('parameter-name').includes('total-precipitation'));assert.equal(u.searchParams.get('datetime'),'2026-10-18T14:00:00.000Z/2026-10-20T12:00:00.000Z');
   const [lon,lat]=u.searchParams.get('coords').slice(6,-1).split(' ').map(Number);assert(lon>17&&lon<22);assert(lat>57&&lat<60);assert(!u.searchParams.has('api-key'));
   return new Response(JSON.stringify({type:'FeatureCollection',features:[{type:'Feature',geometry:{type:'Point',coordinates:[lon,lat]},properties:{step:T,'wind-speed-10m':3,'wind-dir-10m':90,'fraction-of-cloud-cover':.4}}]}));
  }});
@@ -120,10 +120,10 @@ test('DMI respects Retry-After and shares its cooldown across worker instances a
  const second=await b(request('wind-grid'),{});assert.equal(second.status,429);assert.equal(calls,1);clock+=121000;assert.equal((await b(request('ports'),{})).status,429);assert.equal(calls,2);
 });
 
-test('DMI server busy without Retry-After has a safe pause rather than a quick retry',async()=>{
+test('DMI server busy without Retry-After starts at ten seconds and backs off',async()=>{
  let clock=Date.parse(T),calls=0;const api=createForecastAPI({now:()=>clock,fetcher:async()=>{calls++;return new Response('Server is busy',{status:429});}});const req=()=>new Request('https://weather.seasync.co/api/forecast?model=dmi_wam&group=ports');
- const first=await api(req(),{});assert.equal(first.status,429);assert.equal(first.headers.get('Retry-After'),'60');assert.equal(calls,1);assert.equal((await api(req(),{})).status,429);assert.equal(calls,1);
- const metadata=await api(new Request('https://weather.seasync.co/api/model-updates?model=dmi_wam'),{});assert.equal(metadata.status,429);assert.equal(calls,1);
+ const first=await api(req(),{});assert.equal(first.status,429);assert.equal(first.headers.get('Retry-After'),'10');assert.equal(calls,1);assert.equal((await api(req(),{})).status,429);assert.equal(calls,1);
+ const metadata=await api(new Request('https://weather.seasync.co/api/model-updates?model=dmi_wam'),{});assert.equal(metadata.status,429);assert.equal(calls,1);clock+=10000;assert.equal((await api(req(),{})).headers.get('Retry-After'),'30');assert.equal(calls,2);clock+=30000;assert.equal((await api(req(),{})).headers.get('Retry-After'),'90');assert.equal(calls,3);
 });
 
 test('DMI handles an HTTP date in Retry-After',async()=>{
@@ -135,4 +135,32 @@ test('client respects the DMI server cooldown when another group is selected',as
  let calls=0;const c={Date,Intl,Math,Number,Array,Object,String,Map,Set,console,URLSearchParams,AbortSignal,matchMedia:()=>({matches:false}),localStorage:{getItem(){return null;}},document:{getElementById:()=>({})},fetch:async()=>{calls++;return new Response(JSON.stringify({error:'DMI jest przeciążone',retryAt:new Date(Date.now()+120000).toISOString(),retryAfter:120}),{status:429});}};
  vm.createContext(c);vm.runInContext(fs.readFileSync('dist/app.js','utf8').replace(/start\(\);\s*$/,'')+';globalThis.t={fetchProvider};',c);
  await assert.rejects(c.t.fetchProvider('dmi_harmonie','ports'),e=>e.status===429);await assert.rejects(c.t.fetchProvider('dmi_harmonie','wind-grid'),e=>e.status===429);assert.equal(calls,1);
+});
+
+function dmiClientFixture(statuses){
+ let clock=Date.parse(T),calls=0,mapLoads=0,id=0;const timers=new Map();
+ class Clock extends Date{static now(){return clock;}}
+ const c={Date:Clock,Intl,Math,Number,Array,Object,String,Map,Set,console,URLSearchParams,AbortSignal,matchMedia:()=>({matches:false}),
+  setTimeout(fn,delay){timers.set(++id,{fn,at:clock+delay});return id;},clearTimeout(id){timers.delete(id);},
+  localStorage:{getItem(){return null;},setItem(){}},document:{hidden:false,getElementById:()=>({})},
+  fetch:async()=>{const status=statuses[Math.min(calls++,statuses.length-1)];return new Response(JSON.stringify(status===429?{error:'Server is busy',retryAt:new Date(clock+(calls===1?10000:30000)).toISOString(),retryAfter:calls===1?10:30}:{records:Array.from({length:3},(_,i)=>({id:String(i),hourly:{time:[],wind_speed_10m:[]}})),nextOffset:null}),{status});}};
+ vm.createContext(c);vm.runInContext(fs.readFileSync('dist/app.js','utf8').replace(/start\(\);\s*$/,'')+`;renderAll=()=>{};renderUpdateClocks=()=>{};loadField=async()=>{recordMapLoad();};globalThis.t={state,loadExtraWindPorts,providerRetries,providerRetryTimers,resumeDMIRetries,clearDMIRetryTimers};`,Object.assign(c,{recordMapLoad(){mapLoads++;}}));
+ c.t.state.model='dmi_harmonie';return {c,timers,get calls(){return calls;},get mapLoads(){return mapLoads;},async fire(){const [id,timer]=[...timers][0];timers.delete(id);clock=Math.max(clock,timer.at);await timer.fn();}};
+}
+test('selected DMI retries automatically twice, deduplicates timers and recovers chart plus map',async()=>{
+ const f=dmiClientFixture([429,429,200]),t=f.c.t;await t.loadExtraWindPorts('dmi_harmonie');assert.equal(f.calls,1);assert.equal(f.timers.size,1);assert.match(t.state.errors.dmi_harmonie,/próba 1\/2/);
+ await t.loadExtraWindPorts('dmi_harmonie');assert.equal(f.calls,1);assert.equal(f.timers.size,1);
+ await f.fire();assert.equal(f.calls,2);assert.equal(f.timers.size,1);assert.match(t.state.errors.dmi_harmonie,/próba 2\/2/);
+ await f.fire();assert.equal(f.calls,3);assert.equal(t.state.wind.dmi_harmonie.length,3);assert.equal(t.state.errors.dmi_harmonie,'');assert.equal(f.timers.size,0);assert.equal(t.providerRetries.size,0);assert.equal(f.mapLoads,1);
+});
+test('persistent DMI 429 stops automatic attempts after two retries',async()=>{
+ const f=dmiClientFixture([429]),t=f.c.t;await t.loadExtraWindPorts('dmi_harmonie');
+ // A concurrent map response can replace the retry record before the timer fires.
+ t.providerRetries.set('dmi_harmonie',{...t.providerRetries.get('dmi_harmonie')});await f.fire();await f.fire();assert.equal(f.calls,3);assert.equal(f.timers.size,0);assert.equal(f.mapLoads,0);assert.match(t.state.errors.dmi_harmonie,/Automatyczne ponowienia zakończone/);
+ t.resumeDMIRetries();assert.equal(f.timers.size,0);assert.equal(f.calls,3);
+});
+test('automatic DMI retries pause in a hidden page and skip an unselected source',async()=>{
+ const f=dmiClientFixture([429]),t=f.c.t;f.c.document.hidden=true;await t.loadExtraWindPorts('dmi_harmonie');assert.equal(f.timers.size,0);assert.equal(f.calls,1);
+ f.c.document.hidden=false;t.resumeDMIRetries();assert.equal(f.timers.size,1);f.c.document.hidden=true;t.clearDMIRetryTimers();assert.equal(f.timers.size,0);
+ f.c.document.hidden=false;t.resumeDMIRetries();t.state.model='ecmwf_ifs';await f.fire();assert.equal(f.calls,1);assert.equal(f.timers.size,0);
 });

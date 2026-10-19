@@ -13,7 +13,7 @@ Object.assign(WAVE_SOURCES,{fmi_wam:{label:'FMI WAM',available:true,api:true,des
 const WAVE_LABEL='ECMWF WAM';
 function waveSourceLabel(){return WAVE_SOURCES[state.waveSource].label;}
 function selectWaveSource(source){
- if(!WAVE_SOURCES[source]?.available)return false;state.waveSource=source;renderAll();
+ if(!WAVE_SOURCES[source]?.available)return false;const changed=state.waveSource!==source;state.waveSource=source;if(changed)resetDMIRetryAttempts(source);renderAll();
  if(source==='stormglass')loadStormglassPorts();else if(source!=='ecmwf_wam')loadExtraWavePorts(source);
  loadModelTiming(source);loadRouteWaves();if(state.layer==='wave')loadField();return true;
 }
@@ -194,7 +194,7 @@ async function loadPorts(force=false){
    let r,records;if(model==='smhi_snow'){const result=await loadSMHI(force);r=result.meta;records=result.records;}else if(MODELS[model].api){const result=await fetchProvider(model,'ports',force);r=result.meta;records=result.records;}else{const u=url('https://api.open-meteo.com/v1/forecast',PORTS,{hourly:'wind_speed_10m,wind_gusts_10m,wind_direction_10m,cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,precipitation',wind_speed_unit:'ms',models:model,cell_selection:'nearest'});r=await requestJSON(u,'points-weather-v2-'+model,force);records=list(r.data);}
    if(records.length!==PORTS.length)throw Error('Niepełna lista punktów');
    state.wind[model]=records;state.metas[model]=r;if(r.timing)state.timings[model]=r.timing;state.errors[model]='';
-  }catch(e){state.errors[model]=MODELS[model].short+': nie udało się pobrać prognozy. Użyj ↻, aby ponowić.';console.warn(model,e.message);}
+  }catch(e){state.errors[model]=MODELS[model].api?MODELS[model].label+': '+scheduleDMIRetry(model,e):MODELS[model].short+': nie udało się pobrać prognozy. Użyj ↻, aby ponowić.';console.warn(model,e.message);}
   renderAll();
  });
  jobs.push((async()=>{
@@ -300,7 +300,7 @@ function updateScale(){
  $('scaleLabels').innerHTML=values.map((v,i)=>{const rgb=wave?color(v):windRGB(v),ink=rgb[0]*.2126+rgb[1]*.7152+rgb[2]*.0722<130?'#fff':'#15343e';return `<span class="scale-step" style="background:rgb(${rgb.join(',')});color:${ink}">${v.toLocaleString('pl-PL')}${i===0?'+':''}</span>`;}).join('');
 }
 function selectModel(model){
- if(!MODELS[model])return;state.model=model;document.querySelectorAll('[data-model]').forEach(x=>x.classList.toggle('active',x.dataset.model===model));
+ if(!MODELS[model])return;const changed=state.model!==model;state.model=model;if(changed)resetDMIRetryAttempts(model);document.querySelectorAll('[data-model]').forEach(x=>x.classList.toggle('active',x.dataset.model===model));
  if($('windSource'))$('windSource').value=model;$('modelDescription').textContent=MODELS[model].desc;renderAll();
  if(MODELS[model].api)loadExtraWindPorts(model);loadModelTiming(model);if(state.layer!=='wave')loadField();
 }
@@ -311,7 +311,36 @@ async function loadStormglassPorts(force=false){if(stormglassPortRequest)return 
 async function loadStormglassRoute(force=false){if(stormglassRouteRequest)return stormglassRouteRequest;if(!state.stormglassStatus.configured||!state.stormglassStatus.routeEnabled){updateRouteWaves();return;}if(state.stormglassRoute&&!force){updateRouteWaves();return;}stormglassRouteRequest=(async()=>{state.routeWaveLoading=true;state.routeWaveError=false;updateRouteWaves();try{const points=routeGeometry().points,records=[];let offset=0,stale=false;do{const r=await requestJSON('/api/stormglass/waves?group=route&offset='+offset,'stormglass-route-v1-'+offset,force);if(!Array.isArray(r.data.records))throw Error('Brak danych trasy');records.push(...r.data.records);stale=stale||r.stale;offset=r.data.nextOffset;}while(offset!==null);if(records.length!==points.length)throw Error('Niepełna prognoza trasy');state.stormglassRoute=points.map((p,i)=>({...p,series:records.find(r=>r.id===String(i))}));state.metas['route-wave-stormglass']={saved:Math.min(...records.map(r=>r.saved)),stale};}catch{state.routeWaveError=true;}finally{stormglassRouteRequest=null;state.routeWaveLoading=false;updateRouteWaves();if(state.waveSource==='stormglass'&&state.layer==='wave'){drawField();updateFieldStatus();}}})();return stormglassRouteRequest;}
 
 
-const providerRequests=new Map(),providerRetries=new Map();
+const providerRequests=new Map(),providerRetries=new Map(),providerRetryTimers=new Map();
+function dmiSelected(model){return model===state.model||model===state.waveSource;}
+function clearDMIRetryTimers(){for(const timer of providerRetryTimers.values())clearTimeout(timer);providerRetryTimers.clear();}
+function resetDMIRetryAttempts(model=null){
+ for(const [source,timer] of providerRetryTimers)if(!model||source===model||!dmiSelected(source)){clearTimeout(timer);providerRetryTimers.delete(source);}
+ for(const [source,retry] of providerRetries)if(!model||source===model)retry.attempts=0;
+}
+function scheduleDMIRetry(model,error){
+ if(!model.startsWith('dmi_')||error.status!==429)return error.message;
+ const retry=providerRetries.get(model);if(!retry)return error.message;
+ if(!dmiSelected(model)||document.hidden)return error.message;
+ if(retry.attempts>=2)return error.message+' Automatyczne ponowienia zakończone. Użyj ↻, aby spróbować później.';
+ if(!providerRetryTimers.has(model))providerRetryTimers.set(model,setTimeout(async()=>{
+  providerRetryTimers.delete(model);if(document.hidden||!dmiSelected(model))return;
+  const current=providerRetries.get(model);if(!current)return;
+  if(Date.now()<current.until){scheduleDMIRetry(model,current.error);return;}
+  current.attempts++;
+  if(model==='dmi_harmonie')await loadExtraWindPorts(model,true);else await loadExtraWavePorts(model,true);
+  // Load large map/route groups only once the small port forecast succeeds.
+  if(providerRetries.has(model))return;
+  if(model===state.waveSource)await loadRouteWaves();
+  if((model===state.model&&state.layer!=='wave')||(model===state.waveSource&&state.layer==='wave'))await loadField();
+ },Math.max(0,retry.until-Date.now())+250));
+ const when=new Intl.DateTimeFormat('pl-PL',{timeZone:'Europe/Stockholm',hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(new Date(retry.until));
+ return 'DMI chwilowo niedostępne (HTTP 429). Automatyczna próba '+(retry.attempts+1)+'/2 o '+when+' (czas szwedzki).';
+}
+function resumeDMIRetries(){
+ for(const [model,retry] of providerRetries){if(!dmiSelected(model))continue;const key=model==='dmi_harmonie'?model:'wave-'+model;state.errors[key]=(MODELS[model]||WAVE_SOURCES[model]).label+': '+scheduleDMIRetry(model,retry.error);}
+ renderAll();
+}
 async function fetchProvider(model,group,force=false,onProgress){
  const retry=providerRetries.get(model);if(retry&&Date.now()<retry.until)throw retry.error;const key=model+'/'+group;if(providerRequests.has(key))return providerRequests.get(key);
  const job=(async()=>{let offset=0,records=[],timing=null,saved=Infinity,stale=false;
@@ -319,14 +348,15 @@ async function fetchProvider(model,group,force=false,onProgress){
    if(!Array.isArray(r.data.records)||!r.data.records.length)throw Error('Brak rekordów modelu');records.push(...r.data.records);timing=r.data.timing||timing;saved=Math.min(saved,r.data.saved||r.saved);stale=stale||r.stale;
    const next=r.data.nextOffset;if(next!==null&&(!Number.isInteger(next)||next<=offset))throw Error('Nieprawidłowy zakres modelu');offset=next;if(onProgress)onProgress(records);
   }while(offset!==null);
+  if(model.startsWith('dmi_')){providerRetries.delete(model);if(providerRetryTimers.has(model))clearTimeout(providerRetryTimers.get(model));providerRetryTimers.delete(model);}
   return {records,meta:{saved,stale,timing}};
- })().catch(error=>{if(model.startsWith('dmi_')&&error.status===429)providerRetries.set(model,{until:Date.parse(error.retryAt)||Date.now()+(error.retryAfter||60)*1000,error});throw error;}).finally(()=>providerRequests.delete(key));providerRequests.set(key,job);return job;
+ })().catch(error=>{if(model.startsWith('dmi_')&&error.status===429)providerRetries.set(model,{until:Date.parse(error.retryAt)||Date.now()+(error.retryAfter||10)*1000,error,attempts:providerRetries.get(model)?.attempts||0});throw error;}).finally(()=>providerRequests.delete(key));providerRequests.set(key,job);return job;
 }
 async function loadExtraWindPorts(model,force=false){
  if(!MODELS[model]?.api)return;if(!force&&state.wind[model])return;
  state.providerLoading[model]=true;renderUpdateClocks();
  try{const result=await fetchProvider(model,'ports',force);state.wind[model]=result.records;state.metas[model]=result.meta;state.timings[model]=result.meta.timing;state.errors[model]='';}
- catch(e){state.errors[model]=MODELS[model].label+': '+e.message;}finally{state.providerLoading[model]=false;renderAll();}
+ catch(e){state.errors[model]=MODELS[model].label+': '+scheduleDMIRetry(model,e);}finally{state.providerLoading[model]=false;renderAll();}
 }
 async function loadExtraWavePorts(source,force=false){
  if(['ecmwf_wam','stormglass','smhi_swan'].includes(source))return;if(!force&&state.waves[source])return;
@@ -335,7 +365,7 @@ async function loadExtraWavePorts(source,force=false){
   if(WAVE_SOURCES[source].api){const result=await fetchProvider(source,'ports',force);records=result.records;meta=result.meta;state.timings[source]=meta.timing;}
   else{const r=await requestJSON(url('https://marine-api.open-meteo.com/v1/marine',PORTS,{hourly:'wave_height,wave_direction,wave_period',models:source,cell_selection:'sea'}),'wave-ports-v2-'+source,force);records=list(r.data);meta=r;}
   if(records.length!==PORTS.length)throw Error('Niepełna lista punktów');state.waves[source]=records;state.metas['wave-'+source]=meta;state.errors['wave-'+source]='';
- }catch(e){state.errors['wave-'+source]=WAVE_SOURCES[source].label+': '+e.message;}finally{state.providerLoading[source]=false;renderAll();}
+ }catch(e){state.errors['wave-'+source]=WAVE_SOURCES[source].label+': '+scheduleDMIRetry(source,e);}finally{state.providerLoading[source]=false;renderAll();}
 }
 async function loadModelTiming(model,force=false){
  if(!['ecmwf_ifs','icon_eu','icon_global','ecmwf_wam','dwd_ewam','dmi_harmonie','dmi_wam','copernicus_baltic'].includes(model)){renderUpdateClocks();return;}
@@ -366,6 +396,6 @@ function bindChartDrag(){
  scroller.addEventListener('click',event=>{if(blockClick){event.preventDefault();event.stopImmediatePropagation();}},true);
  }
 }
-function bindEvents(){ bindChartDrag();$('timelineLabels').onclick=e=>{const tick=e.target.closest('[data-hour]');if(tick)setHour(tick.dataset.hour);}; $('waveAvailableHour').onclick=()=>{const next=nextWaveHour(selectedWaveRecords());if(next!==null)setHour(state.times.indexOf(next),true);}; $('windSource').onchange=e=>selectModel(e.target.value); $('waveSource').onchange=e=>{if(!selectWaveSource(e.target.value))e.target.value=state.waveSource;}; $('ports').addEventListener('click',e=>{const b=e.target.closest('[data-port]');if(b)selectPort(Number(b.dataset.port));});$('models').addEventListener('click',e=>{const b=e.target.closest('[data-model]');if(b)selectModel(b.dataset.model);});$('tableLabels').addEventListener('click',e=>{const b=e.target.closest('[data-select-model]');if(b)selectModel(b.dataset.selectModel);});$('routeWaves').onclick=()=>{state.routeWaves=!state.routeWaves;updateRouteWaves();};$('routeFit').onclick=()=>{if(map){const geometry=routeGeometry();map.fitBounds(geometry.polygon.map(p=>[p.lat,p.lon]),{padding:[35,45]});}};$('flags').onclick=()=>{state.flags=!state.flags;$('flags').setAttribute('aria-pressed',state.flags);$('flags').classList.toggle('active',state.flags);updateMarkers();};$('layers').addEventListener('click',e=>{const b=e.target.closest('[data-layer]');if(!b)return;state.layer=b.dataset.layer;document.querySelectorAll('[data-layer]').forEach(x=>x.classList.toggle('active',x===b));updateScale();renderTimeline();updateMarkers();updateRouteWaves();drawField();loadField();});$('ranges').addEventListener('click',e=>{const b=e.target.closest('[data-range]');if(!b)return;state.range=Number(b.dataset.range);document.querySelectorAll('[data-range]').forEach(x=>x.classList.toggle('active',x===b));renderChart();});$('compare').onclick=()=>{state.compare=!state.compare;$('compare').setAttribute('aria-pressed',state.compare);renderChart();};$('hour').oninput=e=>setHour(e.target.value,true);$('chartContent').onclick=e=>{const b=e.target.closest('[data-hour]');if(b)setHour(b.dataset.hour);else if(e.target.closest('svg')){const r=$('chartContent').getBoundingClientRect();setHour(Math.floor((e.clientX-r.left)/48));}};let timer;$('play').onclick=()=>{state.playing=!state.playing;$('play').textContent=state.playing?'Ⅱ':'▶';$('play').setAttribute('aria-pressed',state.playing);$('play').setAttribute('aria-label',state.playing?'Zatrzymaj prognozę':'Odtwórz prognozę');clearInterval(timer);if(state.playing)timer=setInterval(()=>setHour((state.hour+1)%state.times.length,true),1000);};$('now').onclick=()=>{const now=Math.floor(Date.now()/3600000)*3600;const i=state.times.findIndex(t=>t>=now);setHour(i<0?state.times.length-1:i,true);};$('anim').setAttribute('aria-pressed',state.animate);$('anim').classList.toggle('on',state.animate);$('anim').onclick=()=>{state.animate=!state.animate;$('anim').classList.toggle('on',state.animate);$('anim').setAttribute('aria-pressed',state.animate);if(!state.animate&&pctx)pctx.clearRect(0,0,particleCanvas.width,particleCanvas.height);};$('zoomIn').onclick=()=>map?.zoomIn();$('zoomOut').onclick=()=>map?.zoomOut();$('fit').onclick=()=>map?.fitBounds([[54.2,11],[65.7,29]],{padding:[12,12]});$('refresh').onclick=async()=>{$('refresh').disabled=true;resetForecastWindow();renderAll();await Promise.allSettled([loadPorts(true),loadField(true),loadRouteWaves(true),loadExtraWavePorts(state.waveSource,true),loadModelTiming(state.model,true),loadModelTiming(state.waveSource,true),...(state.waveSource==='stormglass'?[loadStormglassPorts(true)]:[])]);$('refresh').disabled=false;};for(const id of ['info','sources','about'])$(id).onclick=()=>$('aboutDialog').showModal();$('closeDialog').onclick=()=>$('aboutDialog').close();$('aboutDialog').addEventListener('click',e=>{if(e.target===$('aboutDialog')){const r=e.target.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)e.target.close();}});document.addEventListener('keydown',e=>{if($('aboutDialog').open||['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName))return;if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();setHour(state.hour+(e.key==='ArrowRight'?1:-1),true);}});}
+function bindEvents(){ document.addEventListener('visibilitychange',()=>{if(document.hidden)clearDMIRetryTimers();else resumeDMIRetries();});bindChartDrag();$('timelineLabels').onclick=e=>{const tick=e.target.closest('[data-hour]');if(tick)setHour(tick.dataset.hour);}; $('waveAvailableHour').onclick=()=>{const next=nextWaveHour(selectedWaveRecords());if(next!==null)setHour(state.times.indexOf(next),true);}; $('windSource').onchange=e=>selectModel(e.target.value); $('waveSource').onchange=e=>{if(!selectWaveSource(e.target.value))e.target.value=state.waveSource;}; $('ports').addEventListener('click',e=>{const b=e.target.closest('[data-port]');if(b)selectPort(Number(b.dataset.port));});$('models').addEventListener('click',e=>{const b=e.target.closest('[data-model]');if(b)selectModel(b.dataset.model);});$('tableLabels').addEventListener('click',e=>{const b=e.target.closest('[data-select-model]');if(b)selectModel(b.dataset.selectModel);});$('routeWaves').onclick=()=>{state.routeWaves=!state.routeWaves;updateRouteWaves();};$('routeFit').onclick=()=>{if(map){const geometry=routeGeometry();map.fitBounds(geometry.polygon.map(p=>[p.lat,p.lon]),{padding:[35,45]});}};$('flags').onclick=()=>{state.flags=!state.flags;$('flags').setAttribute('aria-pressed',state.flags);$('flags').classList.toggle('active',state.flags);updateMarkers();};$('layers').addEventListener('click',e=>{const b=e.target.closest('[data-layer]');if(!b)return;state.layer=b.dataset.layer;document.querySelectorAll('[data-layer]').forEach(x=>x.classList.toggle('active',x===b));updateScale();renderTimeline();updateMarkers();updateRouteWaves();drawField();loadField();});$('ranges').addEventListener('click',e=>{const b=e.target.closest('[data-range]');if(!b)return;state.range=Number(b.dataset.range);document.querySelectorAll('[data-range]').forEach(x=>x.classList.toggle('active',x===b));renderChart();});$('compare').onclick=()=>{state.compare=!state.compare;$('compare').setAttribute('aria-pressed',state.compare);renderChart();};$('hour').oninput=e=>setHour(e.target.value,true);$('chartContent').onclick=e=>{const b=e.target.closest('[data-hour]');if(b)setHour(b.dataset.hour);else if(e.target.closest('svg')){const r=$('chartContent').getBoundingClientRect();setHour(Math.floor((e.clientX-r.left)/48));}};let timer;$('play').onclick=()=>{state.playing=!state.playing;$('play').textContent=state.playing?'Ⅱ':'▶';$('play').setAttribute('aria-pressed',state.playing);$('play').setAttribute('aria-label',state.playing?'Zatrzymaj prognozę':'Odtwórz prognozę');clearInterval(timer);if(state.playing)timer=setInterval(()=>setHour((state.hour+1)%state.times.length,true),1000);};$('now').onclick=()=>{const now=Math.floor(Date.now()/3600000)*3600;const i=state.times.findIndex(t=>t>=now);setHour(i<0?state.times.length-1:i,true);};$('anim').setAttribute('aria-pressed',state.animate);$('anim').classList.toggle('on',state.animate);$('anim').onclick=()=>{state.animate=!state.animate;$('anim').classList.toggle('on',state.animate);$('anim').setAttribute('aria-pressed',state.animate);if(!state.animate&&pctx)pctx.clearRect(0,0,particleCanvas.width,particleCanvas.height);};$('zoomIn').onclick=()=>map?.zoomIn();$('zoomOut').onclick=()=>map?.zoomOut();$('fit').onclick=()=>map?.fitBounds([[54.2,11],[65.7,29]],{padding:[12,12]});$('refresh').onclick=async()=>{$('refresh').disabled=true;resetDMIRetryAttempts();resetForecastWindow();renderAll();await Promise.allSettled([loadPorts(true),loadField(true),loadRouteWaves(true),loadExtraWavePorts(state.waveSource,true),loadModelTiming(state.model,true),loadModelTiming(state.waveSource,true),...(state.waveSource==='stormglass'?[loadStormglassPorts(true)]:[])]);$('refresh').disabled=false;};for(const id of ['info','sources','about'])$(id).onclick=()=>$('aboutDialog').showModal();$('closeDialog').onclick=()=>$('aboutDialog').close();$('aboutDialog').addEventListener('click',e=>{if(e.target===$('aboutDialog')){const r=e.target.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)e.target.close();}});document.addEventListener('keydown',e=>{if($('aboutDialog').open||['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName))return;if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();setHour(state.hour+(e.key==='ArrowRight'?1:-1),true);}});}
 async function start(){resetForecastWindow();renderPorts();renderTimeline();renderTableLabels();bindEvents();updateScale();initMap();setInterval(advanceFlagCycle,3000);const clock=()=>$('clock').textContent=timeFmt.format(new Date());clock();setInterval(()=>{clock();renderUpdateClocks();},30000);loadModelTiming(state.model);loadModelTiming(state.waveSource);setInterval(()=>{if(document.hidden)return;loadModelTiming(state.model,true);loadModelTiming(state.waveSource,true);},300000);loadPorts();loadStormglassStatus();try{const r=await fetch('assets/land.json');if(!r.ok)throw Error('land');state.land=await r.json();state.gridPoints=grid();initRouteWaves();await Promise.allSettled([loadField(),loadRouteWaves()]);}catch(e){$('fieldStatus').textContent='Nie można wczytać pola mapy. Odśwież aplikację.';}}
 start();

@@ -68,7 +68,7 @@ export function createDMIRequester({fetcher,now=()=>Date.now(),cache=null,pause=
    const response=await fetcher(url,{signal:AbortSignal.timeout(35000),headers:{Accept:'application/geo+json, application/prs.coverage+json, application/json'}});
    if(response.status===429){
     failures++;const raw=response.headers.get('Retry-After'),seconds=raw&&/^\d+(\.\d+)?$/.test(raw)?Number(raw):null,headerDelay=seconds!==null?seconds*1000:raw?Date.parse(raw)-now():NaN;
-    const backoff=Number.isFinite(headerDelay)&&headerDelay>0?headerDelay:Math.min(900000,60000*2**(failures-1));cooldownUntil=now()+backoff;
+    const backoff=Number.isFinite(headerDelay)&&headerDelay>0?headerDelay:Math.min(900000,10000*3**(failures-1));cooldownUntil=now()+backoff;
     if(store)await store.put(cooldownKey,new Response(JSON.stringify({until:cooldownUntil}),{headers:{'Content-Type':'application/json','Cache-Control':'public, max-age='+Math.max(1,Math.ceil(backoff/1000))}}));
     await response.body?.cancel();throw busy(cooldownUntil);
    }
@@ -136,7 +136,7 @@ export function createForecastAPI({fetcher=(...args)=>fetch(...args),now=()=>Dat
       const sea=model==='dmi_wam'&&group==='ports';
       const query={crs:'crs84','parameter-name':fields,datetime:queryStart+'/'+queryEnd,f:sea?'CoverageJSON':'GeoJSON'};
       if(sea)query.bbox=[p.lon-.12,p.lat-.08,p.lon+.12,p.lat+.08].join(',');else query.coords='POINT('+p.lon+' '+p.lat+')';
-      const url=root+'/'+(sea?'cube':'position')+'?'+new URLSearchParams(query);
+      const url=root+'/'+(sea?'cube':'position')+'?'+new URLSearchParams(query).toString().replace(/\+/g,'%20');
       const data=await getJSON(url,model==='dmi_harmonie'?900:1800),result=sea?normalizeDMI(data,[p],model,null,now()):normalizeDMIGeoJSON(data,[p],model,null,now());
       records.push(...result.records);
     }
