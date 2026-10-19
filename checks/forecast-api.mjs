@@ -210,3 +210,8 @@ test('browser manual refresh returns cached weather until the provider deadline'
  vm.createContext(c);vm.runInContext(fs.readFileSync('dist/app.js','utf8').replace(/start\(\);\s*$/,'')+';globalThis.requestWeather=requestJSON;',c);
  await c.requestWeather('/api/forecast?model=ecmwf_ifs','cycle',true);clock=Date.parse('2026-10-19T11:59:59Z');await c.requestWeather('/api/forecast?model=ecmwf_ifs','cycle',true);assert.equal(calls,1);clock=Date.parse('2026-10-19T12:00:00Z');await c.requestWeather('/api/forecast?model=ecmwf_ifs','cycle',true);assert.equal(calls,2);
 });
+
+test('an existing DMI snapshot also suppresses metadata requests before its deadline',async()=>{
+ const cache=forecastStore(),saved=Date.parse(T),snapshot=normalizeDMIOpenMeteo(openMeteoFixture([point]),[point],saved);await cache.put(new Request('https://weather.seasync.co/__dmi_last_good/v1/'+encodeURIComponent('dmi_harmonie/ports/0')),Response.json(snapshot));let calls=0;
+ const api=createForecastAPI({cache,now:()=>saved+3600000,fetcher:async()=>{calls++;throw Error('must not check DMI');}}),res=await api(new Request('https://weather.seasync.co/api/model-updates?model=dmi_harmonie'),{});assert.equal(res.status,200);assert.equal((await res.json()).refreshAfter,snapshot.timing.nextUpdate);assert.equal(calls,0);
+});

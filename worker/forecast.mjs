@@ -190,7 +190,7 @@ export function createForecastAPI({fetcher=(...args)=>fetch(...args),now=()=>Dat
     if(u.pathname==='/api/model-updates'){
       if(!SOURCES[model])return json({error:'Nieznany model.'},400);
       const snapshot=await lastGood.peek([model,'ports',0].join('/'));
-      if(snapshot&&now()<Date.parse(snapshot.refreshAfter))return json({timing:snapshot.timing,refreshAfter:snapshot.refreshAfter,checkedAt:iso(snapshot.checkedAt)});
+      if(snapshot&&now()<Date.parse(snapshot.refreshAfter||snapshot.timing?.nextUpdate))return json({timing:snapshot.timing,refreshAfter:snapshot.refreshAfter||snapshot.timing?.nextUpdate,checkedAt:iso(snapshot.checkedAt)});
       if(model==='smhi_snow')return snapshot?json({timing:snapshot.timing,refreshAfter:snapshot.refreshAfter}):json({error:'Czas aktualizacji pojawi się po pobraniu prognozy.'},503);
       try{const schedule=await getSchedule(model);return json({timing:schedule.timing,refreshAfter:schedule.refreshAfter,checkedAt:iso(schedule.saved)});}
       catch(e){return json({error:'Czas aktualizacji chwilowo niedostępny.',...(e.retryAt?{retryAt:iso(e.retryAt),retryAfter:e.retryAfter}:{})},e.status===429?429:502,e.retryAfter?{'Retry-After':String(e.retryAfter)}:{});}
